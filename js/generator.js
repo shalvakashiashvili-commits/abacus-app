@@ -1,7 +1,8 @@
 // მაგალითების გენერატორი. კრიტიკული წესი: მაგალითში მხოლოდ ის ფორმულები შეიძლება იყოს,
 // რაც დონის კონფიგურაციაში (level.allowed) უკვე ნასწავლია. ყოველი მოქმედება მოწმდება analyze()-ით.
 
-import { analyze } from './techniques.js';
+import { analyze, TECHS } from './techniques.js';
+import { mulProgram, divProgram, nDigits } from './muldiv.js';
 
 // განმეორებადი შემთხვევითი რიცხვები (ტესტებისთვის); ნაგულისხმევად Math.random
 export function makeRng(seed) {
@@ -25,7 +26,10 @@ function pick(rng, arr) {
 }
 
 export function problemKey(p) {
-  return p.kind + ':' + (p.terms ? p.terms.join(',') : p.value);
+  if (p.kind === 'mul' || p.kind === 'div' || p.kind === 'table') {
+    return `${p.kind}:${p.a}/${p.aDec || 0}:${p.b}/${p.bDec || 0}:${p.qDec || 0}`;
+  }
+  return p.kind + ':' + (p.terms ? p.terms.join(',') : p.value) + (p.unit ? `@${p.unit}` : '');
 }
 
 export function sumTerms(terms) {
@@ -62,7 +66,129 @@ function genNumber(spec, level, rng) {
   return { kind: spec.kind, value, answer: value, level: level.id };
 }
 
+// შემთხვევითი რიცხვი minD–maxD ნიშნით
+function randDigits(rng, minD, maxD) {
+  const d = randInt(rng, minD, maxD);
+  return randInt(rng, d > 1 ? 10 ** (d - 1) : 1, 10 ** d - 1);
+}
+
+// სვეტები დონეებზე, სადაც ყველა ფორმულა ნასწავლია (დონე 5): ფორმულების შეზღუდვა აღარ არის,
+// ამიტომ რიცხვებს პირდაპირ ვირჩევთ (გამოკლება ~25%, შედეგი ყოველთვის დადებითია).
+function genTermsFree(spec, level, rng) {
+  const minD = spec.minDigits || 1;
+  const maxD = spec.digits || minD;
+  const nTerms = spec.terms || 3;
+  const subRate = spec.ops === 'add' ? 0 : spec.ops === 'sub' ? 1 : (spec.subRate ?? 0.25);
+  const first = randDigits(rng, minD, maxD);
+  const terms = [first];
+  let total = first;
+  for (let i = 1; i < nTerms; i++) {
+    let m = randDigits(rng, minD, maxD);
+    let sign = rng() < subRate ? -1 : 1;
+    if (sign < 0 && total - m <= 0) {
+      if (total > 10 ** (minD - 1)) m = randInt(rng, Math.min(10 ** (minD - 1), total - 1), total - 1);
+      else sign = 1;
+      if (m < 1) { sign = 1; m = randDigits(rng, minD, maxD); }
+    }
+    terms.push(sign * m);
+    total += sign * m;
+  }
+  return { kind: spec.kind, terms, answer: total, level: level.id };
+}
+
+// ათწილადი: მთელი ნაწილი 0..(10^digits−1), 1..dec ციფრი მძიმის შემდეგ; შედეგი მასშტაბირებულია 10^unit-ზე
+function randDecimal(rng, digits, dec, unit) {
+  const d = randInt(rng, 1, dec);
+  const ip = randInt(rng, 0, 10 ** digits - 1);
+  let fp = randInt(rng, 0, 10 ** d - 1);
+  if (fp % 10 === 0) fp += randInt(rng, 1, 9); // ბოლო ციფრი არანულოვანი, რომ მძიმის შემდეგ ციფრები ჩანდეს
+  if (fp >= 10 ** d) fp = 10 ** d - 1;
+  return ip * 10 ** unit + fp * 10 ** (unit - d);
+}
+
+function genDecimalNumber(spec, level, rng) {
+  const unit = spec.unit;
+  const digits = randInt(rng, spec.minDigits || 1, spec.maxDigits || spec.minDigits || 1);
+  let value = randDecimal(rng, digits, spec.dec || 1, unit);
+  if (value < 10 ** unit) value += randInt(rng, 1, 9) * 10 ** unit; // მთელი ნაწილიც ჩანდეს
+  return { kind: spec.kind, value, answer: value, unit, level: level.id };
+}
+
+function genDecimalTerms(spec, level, rng) {
+  const unit = spec.unit;
+  const nTerms = spec.terms || 2;
+  const subRate = spec.ops === 'add' ? 0 : spec.ops === 'sub' ? 1 : 0.35;
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const terms = [randDecimal(rng, spec.digits || 1, spec.dec || 1, unit) + 10 ** unit];
+    let total = terms[0];
+    for (let i = 1; i < nTerms; i++) {
+      let t = randDecimal(rng, spec.digits || 1, spec.dec || 1, unit);
+      if (t === 0) t = 10 ** (unit - 1);
+      const sign = rng() < subRate && total - t > 0 ? -1 : 1;
+      terms.push(sign * t);
+      total += sign * t;
+    }
+    if (total > 0) return { kind: spec.kind, terms, answer: total, unit, level: level.id };
+  }
+  throw new Error('ათწილადების მაგალითი ვერ შეიქმნა');
+}
+
+function genTable(spec, level, rng) {
+  const a = pick(rng, spec.rows || [2, 3, 4, 5, 6, 7, 8, 9]);
+  const b = randInt(rng, spec.from || 2, spec.to || 9);
+  return { kind: 'table', a, b, answer: a * b, level: level.id };
+}
+
+function genMul(spec, level, rng) {
+  const [minA, maxA] = spec.aDigits || [2, 2];
+  const place = spec.place ?? 3;
+  const aDec = spec.aDec || 0;
+  const bDec = spec.bDec || 0;
+  for (let attempt = 0; attempt < 200; attempt++) {
+    let a = randDigits(rng, minA, maxA);
+    if (aDec && a % 10 === 0) continue; // ათწილადი ნულით არ მთავრდება
+    if (a % 10 === 0 && rng() < 0.7) continue;
+    const bD = spec.bDigits || 1;
+    const b = bD === 1 ? randInt(rng, 2, 9) : randInt(rng, 11, 99);
+    if (bD > 1 && b % 10 === 0) continue;
+    try {
+      const prog = mulProgram({ a, b, place, aDec, bDec });
+      const ansDec = aDec + bDec;
+      return { kind: 'mul', a, b, aDec, bDec, place, ansUnit: prog.unit, answer: a * b, ansDec, level: level.id };
+    } catch (e) { /* არ ეტევა — ვცდით სხვას */ }
+  }
+  throw new Error(`გამრავლების მაგალითი ვერ შეიქმნა (${JSON.stringify(spec)})`);
+}
+
+function genDiv(spec, level, rng) {
+  const [minQ, maxQ] = spec.qDigits || [1, 2];
+  const place = spec.place ?? 0;
+  const qDec = spec.qDec || 0;
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const bD = spec.bDigits || 1;
+    const b = bD === 1 ? randInt(rng, 2, 9) : randInt(rng, 11, 99);
+    if (bD > 1 && b % 10 === 0) continue;
+    const q = randDigits(rng, minQ, maxQ);
+    if (qDec && q % 10 === 0) continue;
+    if (qDec && q < 10 ** qDec && rng() < 0.5) continue;
+    const r = spec.rem ? randInt(rng, 1, b - 1) : 0;
+    const a = q * b + r;
+    const aDec = qDec; // ათწილადი გასაყოფი: განაყოფს იმდენივე ციფრი აქვს მძიმის შემდეგ
+    if (nDigits(a) > 5) continue;
+    try {
+      const prog = divProgram({ a, b, place, aDec, decimals: qDec });
+      if (prog.remBoard !== r * 10 ** (place - aDec)) continue;
+      return { kind: 'div', a, b, aDec, qDec, place, ansUnit: prog.unit, q, r, answer: q, level: level.id };
+    } catch (e) { /* არ ეტევა */ }
+  }
+  throw new Error(`გაყოფის მაგალითი ვერ შეიქმნა (${JSON.stringify(spec)})`);
+}
+
 function genTerms(spec, level, rng) {
+  if (spec.unit) return genDecimalTerms(spec, level, rng);
+  if (!(level.focus || []).length && TECHS.every((t) => (level.allowed || []).includes(t))) {
+    return genTermsFree(spec, level, rng);
+  }
   const allowed = new Set(level.allowed);
   const focus = level.focus || [];
   const needFocus = spec.focus !== false && focus.length > 0;
@@ -128,8 +254,11 @@ function genTerms(spec, level, rng) {
 }
 
 export function generateProblem(spec, level, rng = Math.random) {
-  if (spec.kind === 'read' || spec.kind === 'set') return genNumber(spec, level, rng);
+  if (spec.kind === 'read' || spec.kind === 'set') return spec.unit ? genDecimalNumber(spec, level, rng) : genNumber(spec, level, rng);
   if (spec.kind === 'calc' || spec.kind === 'column') return genTerms(spec, level, rng);
+  if (spec.kind === 'table') return genTable(spec, level, rng);
+  if (spec.kind === 'mul') return genMul(spec, level, rng);
+  if (spec.kind === 'div') return genDiv(spec, level, rng);
   throw new Error('უცნობი სავარჯიშოს ტიპი: ' + spec.kind);
 }
 

@@ -4,6 +4,7 @@
 
 import { Soroban, MAX_RODS, hasUnitDot, formatNumber } from './soroban.js';
 import { h } from './ui.js';
+import { fmtScaled } from './muldiv.js';
 
 const MIN_ROD_PX = 48;
 
@@ -18,6 +19,9 @@ export class SorobanView {
       zoom: true,
       minRods: 1,
       compact: false,      // მცირე სიმაღლე (წაკითხვის სავარჯიშოსთვის, რომ კლავიატურა ეკრანზე დაეტიოს)
+      dec: 0,              // ათწილადი: ერთეულების ღერო (მნიშვნელობა ნაჩვენებია მძიმით)
+      anchor: null,        // ▼ — ღერო, სადაც რიცხვის ერთეულები უნდა ჩაიწეროს (定位点)
+      unit: null,          // ▲ — პასუხის ერთეულების ღერო
       onChange: null,
       ...opts
     };
@@ -49,10 +53,12 @@ export class SorobanView {
     this.loRow = h('div', { class: 'sbv-row lo' });
     this.board = h('div', { class: 'sbv-board' }, this.upRow, this.beam, this.loRow);
     this.digitsRow = h('div', { class: 'sbv-digits' });
+    this.anchorRow = h('div', { class: 'sbv-mark-row anchor', 'aria-hidden': 'true' });
+    this.unitRow = h('div', { class: 'sbv-mark-row unit', 'aria-hidden': 'true' });
     this.hiddenNote = h('div', { class: 'sbv-note' }, '◀ მძივები დამალულ ღეროებზეც არის — დააჭირე „13 ღერო“');
     this.root = h('div', { class: this.opts.compact ? 'sbv compact' : 'sbv' },
       h('div', { class: 'sbv-top' }, this.valueEl, this.toolbar),
-      this.board, this.digitsRow, this.hiddenNote);
+      this.anchorRow, this.board, this.unitRow, this.digitsRow, this.hiddenNote);
     this.board.addEventListener('pointerdown', (e) => this.onPointer(e));
     this.host.appendChild(this.root);
   }
@@ -86,6 +92,8 @@ export class SorobanView {
     this.loRow.innerHTML = '';
     this.beam.innerHTML = '';
     this.digitsRow.innerHTML = '';
+    this.anchorRow.innerHTML = '';
+    this.unitRow.innerHTML = '';
     this.cells = [];
     for (let i = 0; i < visible; i++) {
       const p = visible - 1 - i;
@@ -100,6 +108,8 @@ export class SorobanView {
       this.loRow.appendChild(lo);
       this.beam.appendChild(slot);
       this.digitsRow.appendChild(dg);
+      this.anchorRow.appendChild(h('span', { class: 'sbv-mark' }, p === this.opts.anchor ? '▼' : ''));
+      this.unitRow.appendChild(h('span', { class: 'sbv-mark' }, p === this.opts.unit ? '▲' : ''));
       this.cells[p] = { up, lo, upBead: up.querySelector('.bead'), loBeads: [...lo.querySelectorAll('.bead')], slot, dg };
     }
     this.update();
@@ -128,7 +138,9 @@ export class SorobanView {
         el.classList.toggle('focus', focus);
       }
     }
-    this.valueEl.textContent = formatNumber(m.value);
+    this.valueEl.textContent = this.opts.dec ? fmtScaled(m.value, this.opts.dec) : formatNumber(m.value);
+    this.anchorRow.hidden = this.opts.anchor === null || this.opts.anchor === undefined;
+    this.unitRow.hidden = this.opts.unit === null || this.opts.unit === undefined;
     this.root.classList.toggle('show-value', this.showValue);
     this.root.classList.toggle('ro', !this.interactive);
     if (this.btnValue) this.btnValue.textContent = this.showValue ? 'მნიშვნელობის დამალვა' : 'მნიშვნელობის ჩვენება';
@@ -204,6 +216,20 @@ export class SorobanView {
   setMinRods(n) {
     this.opts.minRods = n;
     this.layout(true);
+  }
+
+  // ▼ / ▲ მარკერები და ათწილადის ჩვენება
+  setMarkers({ anchor = null, unit = null } = {}) {
+    this.opts.anchor = anchor;
+    this.opts.unit = unit;
+    const need = Math.max(anchor ?? 0, unit ?? 0) + 1;
+    if (need > (this.opts.minRods || 1)) this.opts.minRods = need;
+    this.layout(true);
+  }
+
+  setDecimals(dec) {
+    this.opts.dec = dec || 0;
+    this.update();
   }
 
   setHighlight(part) {

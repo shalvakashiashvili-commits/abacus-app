@@ -1,7 +1,7 @@
 // პროგრესი და პარამეტრები localStorage-ში. ყოველი წაკითხვა/ჩაწერა try/catch-შია.
 // storage შეიძლება გადაეცეს (ტესტებში — მეხსიერებაში მომუშავე ობიექტი).
 
-import { LEVELS, getLevel } from './levels.js';
+import { LEVELS, getLevel, prevBuilt } from './levels.js';
 import { problemKey } from './generator.js';
 
 export const PROGRESS_KEY = 'abacus.progress.v1';
@@ -156,8 +156,8 @@ export class Progress {
   isUnlocked(id) {
     const lvl = getLevel(id);
     if (!lvl || !lvl.built) return false;
-    if (id === 0) return true;
-    return this.isPassed(id - 1);
+    const prev = prevBuilt(lvl.id);
+    return prev ? this.isPassed(prev.id) : true;
   }
 
   // პირველი აწყობილი, გახსნილი და ჯერ გაუვლელი დონე (null — თუ ეტაპის ყველა დონე გავლილია)

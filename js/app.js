@@ -2,7 +2,7 @@
 
 import { h, toast, confirmDialog, fmtSec, fmtPct } from './ui.js';
 import { Progress } from './progress.js';
-import { LEVELS, getLevel, testSize, PASS_ACCURACY } from './levels.js';
+import { LEVELS, getLevel, testSize, PASS_ACCURACY, levelLabel, prevBuilt } from './levels.js';
 import { getLesson } from './lessons.js';
 import { buildSet, shuffle, problemKey } from './generator.js';
 import { renderLesson } from './lesson-player.js';
@@ -45,7 +45,7 @@ function setScreen(render, { showNav = true, navKey = null } = {}) {
 
 function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-  const id = Number(parts[1]);
+  const id = parts[1] ?? null;
   switch (parts[0]) {
     case 'level': return setScreen((r) => levelScreen(r, id), { navKey: 'home' });
     case 'lesson': return setScreen((r) => lessonScreen(r, id), { showNav: false });
@@ -89,20 +89,21 @@ function dailyPlan() {
   if (cur !== null) {
     const lv = progress.level(cur);
     let learn;
-    if (!lv.lessonDone) learn = { desc: `დონე ${cur}: ახსნა${lv.lessonStep ? ' (გაგრძელება)' : ''}`, href: `#/lesson/${cur}` };
-    else if (!lv.guidedDone) learn = { desc: `დონე ${cur}: მართული სავარჯიშო`, href: `#/practice/${cur}/guided` };
-    else if (lv.tasksBest >= 0.8) learn = { desc: `დონე ${cur}: დონის ტესტი`, href: `#/practice/${cur}/test` };
-    else learn = { desc: `დონე ${cur}: მართული სავარჯიშო (კიდევ ერთხელ)`, href: `#/practice/${cur}/guided` };
+    const L = levelLabel(getLevel(cur));
+    if (!lv.lessonDone) learn = { desc: `დონე ${L}: ახსნა${lv.lessonStep ? ' (გაგრძელება)' : ''}`, href: `#/lesson/${cur}` };
+    else if (!lv.guidedDone) learn = { desc: `დონე ${L}: მართული სავარჯიშო`, href: `#/practice/${cur}/guided` };
+    else if (lv.tasksBest >= 0.8) learn = { desc: `დონე ${L}: დონის ტესტი`, href: `#/practice/${cur}/test` };
+    else learn = { desc: `დონე ${L}: მართული სავარჯიშო (კიდევ ერთხელ)`, href: `#/practice/${cur}/guided` };
     blocks.push({ key: 'learn', title: 'ახალი მასალა', min: '~10 წთ', ...learn, available: true, done: !!plan.learn });
     blocks.push({
       key: 'tasks', title: 'დავალებები', min: '~10 წთ',
-      desc: lv.lessonDone ? `დონე ${cur}: 10 ახალი მაგალითი` : 'გაიხსნება ახსნის დასრულების შემდეგ',
+      desc: lv.lessonDone ? `დონე ${L}: ახალი მაგალითები` : 'გაიხსნება ახსნის დასრულების შემდეგ',
       href: `#/practice/${cur}/tasks`, available: lv.lessonDone, done: !!plan.tasks
     });
   } else {
     const last = passed[passed.length - 1];
-    blocks.push({ key: 'learn', title: 'ახალი მასალა', min: '', desc: 'ეტაპი 1-ის ყველა დონე გავლილია — ახალი დონეები შემდეგ ეტაპზე დაემატება', available: false, done: true });
-    blocks.push({ key: 'tasks', title: 'დავალებები', min: '~10 წთ', desc: `დონე ${last}: შენარჩუნებისთვის`, href: `#/practice/${last}/tasks`, available: true, done: !!plan.tasks });
+    blocks.push({ key: 'learn', title: 'ახალი მასალა', min: '', desc: 'ამ ეტაპის ყველა დონე გავლილია — ახალი დონეები შემდეგ ეტაპზე დაემატება', available: false, done: true });
+    blocks.push({ key: 'tasks', title: 'დავალებები', min: '~10 წთ', desc: `დონე ${levelLabel(getLevel(last))}: შენარჩუნებისთვის`, href: `#/practice/${last}/tasks`, available: true, done: !!plan.tasks });
   }
   return blocks;
 }
@@ -147,21 +148,22 @@ function levelMap() {
   const cur = progress.currentLevelId();
   return h('ol', { class: 'map' }, LEVELS.map((l) => {
     let state, label, mark;
-    if (!l.built) { state = 'soon'; label = 'შემდეგ ეტაპზე'; mark = String(l.id); }
+    const L = levelLabel(l);
+    if (!l.built) { state = 'soon'; label = 'შემდეგ ეტაპზე'; mark = L; }
     else if (progress.isPassed(l.id)) { state = 'passed'; label = 'გავლილია'; mark = '✓'; }
-    else if (l.id === cur) { state = 'current'; label = 'მიმდინარე'; mark = String(l.id); }
+    else if (String(l.id) === String(cur)) { state = 'current'; label = 'მიმდინარე'; mark = L; }
     else { state = 'locked'; label = 'დაბლოკილია'; mark = '🔒'; }
     const open = state === 'passed' || state === 'current';
     const onClick = (e) => {
       if (open) return;
       e.preventDefault();
-      toast(state === 'soon' ? 'ეს დონე აპლიკაციის შემდეგ ეტაპზე დაემატება.' : `ჯერ დაასრულე დონე ${l.id - 1}.`);
+      toast(state === 'soon' ? 'ეს დონე აპლიკაციის შემდეგ ეტაპზე დაემატება.' : `ჯერ დაასრულე დონე ${levelLabel(prevBuilt(l.id))}.`);
     };
     return h('li', { class: `map-node ${state}` },
       h('a', { href: open ? `#/level/${l.id}` : '#/', on: { click: onClick } },
         h('span', { class: 'node-circle' }, mark),
         h('span', { class: 'node-text' },
-          h('span', { class: 'node-title' }, `${l.id}. ${l.title}`),
+          h('span', { class: 'node-title' }, `${L}. ${l.title}`),
           h('span', { class: 'node-sub' }, l.subtitle),
           h('span', { class: 'node-state' }, label))));
   }));
@@ -182,7 +184,7 @@ function levelScreen(root, id) {
   const steps = [
     { n: 1, title: 'ახსნა', desc: lessonDesc, href: `#/lesson/${id}`, done: st.lessonDone, enabled: true },
     { n: 2, title: 'მართული სავარჯიშო', desc: 'მინიშნებებით, მარტივიდან რთულისკენ', href: `#/practice/${id}/guided`, done: st.guidedDone, enabled: st.lessonDone },
-    { n: 3, title: 'დავალებები', desc: `10 ავტომატური მაგალითი${st.tasksRuns ? ` · საუკეთესო: ${fmtPct(st.tasksBest)}` : ''}`, href: `#/practice/${id}/tasks`, done: st.tasksBest >= PASS_ACCURACY, enabled: st.lessonDone },
+    { n: 3, title: 'დავალებები', desc: `${lvl.tasks.reduce((a, t) => a + (t.n || 1), 0)} ავტომატური მაგალითი${st.tasksRuns ? ` · საუკეთესო: ${fmtPct(st.tasksBest)}` : ''}`, href: `#/practice/${id}/tasks`, done: st.tasksBest >= PASS_ACCURACY, enabled: st.lessonDone },
     {
       n: 4, title: 'დონის ტესტი',
       desc: `${testSize(lvl)} მაგალითი · ≥ ${Math.round(PASS_ACCURACY * 100)}% · ${maxAvg ? `საშუალოდ ≤ ${maxAvg} წმ` : 'დროის ლიმიტის გარეშე'}${st.testBest !== null ? ` · საუკეთესო: ${fmtPct(st.testBest)}` : ''}`,
@@ -191,7 +193,7 @@ function levelScreen(root, id) {
   ];
   const acc = st.answered ? st.correct / st.answered : null;
   root.append(
-    topbar(`დონე ${id}`),
+    topbar(`დონე ${levelLabel(lvl)}`),
     h('section', { class: 'card' },
       h('h1', { class: 'level-title' }, lvl.title),
       h('p', { class: 'muted' }, lvl.subtitle),
@@ -323,7 +325,7 @@ function progressScreen(root) {
         h('tbody', null, LEVELS.filter((l) => l.built).map((l) => {
           const s = progress.level(l.id);
           return h('tr', null,
-            h('td', null, `${s.passed ? '✓ ' : ''}${l.id}. ${l.title}`),
+            h('td', null, `${s.passed ? '✓ ' : ''}${levelLabel(l)}. ${l.title}`),
             h('td', null, fmtPct(s.answered ? s.correct / s.answered : null)),
             h('td', null, fmtSec(s.answered ? s.ms / s.answered / 1000 : null)),
             h('td', null, s.testBest === null ? '—' : fmtPct(s.testBest)));
@@ -333,7 +335,7 @@ function progressScreen(root) {
         mistakes.length ? h('a', { class: 'btn small primary', href: '#/review' }, 'გამეორება') : null),
       mistakes.length
         ? h('ul', { class: 'mistake-list' }, mistakes.slice(0, 50).map((m) =>
-          h('li', null, h('span', null, `დ${m.level} · ${problemLabel(m.problem)}`),
+          h('li', null, h('span', null, `დ${levelLabel(getLevel(m.level))} · ${problemLabel(m.problem)}`),
             h('span', { class: 'muted small' }, ` ✗${m.wrong}${m.right ? ` ✓${m.right}` : ''}`))))
         : h('p', { class: 'muted' }, 'შეცდომები არ არის. შეცდომით ამოხსნილი მაგალითები აქ ჩაიწერება და შემდეგ სესიებში ხელახლა გამოჩნდება.'))
   );

@@ -4,7 +4,9 @@
 import { h, paragraphs, exprText, digitCount } from './ui.js';
 import { SorobanView } from './soroban-view.js';
 import { getLesson } from './lessons.js';
-import { demoSteps } from './techniques.js';
+import { demoSteps, rodNamer } from './techniques.js';
+import { mulProgram, divProgram, fmtScaled, rodLabel } from './muldiv.js';
+import { levelLabel, getLevel } from './levels.js';
 import { formatNumber } from './soroban.js';
 
 export function renderLesson(root, { levelId, progress, onExit }) {
@@ -16,7 +18,7 @@ export function renderLesson(root, { levelId, progress, onExit }) {
   const counter = h('div', { class: 'topbar-meta' });
   const head = h('div', { class: 'topbar' },
     h('button', { class: 'icon-btn', 'aria-label': 'უკან', on: { click: () => onExit('back') } }, '←'),
-    h('div', { class: 'topbar-title' }, `დონე ${levelId} · ახსნა`),
+    h('div', { class: 'topbar-title' }, `დონე ${levelLabel(getLevel(levelId))} · ახსნა`),
     counter);
   const barFill = h('div', { class: 'bar-fill' });
   const bar = h('div', { class: 'bar' }, barFill);
@@ -69,6 +71,7 @@ function makeWidget(card, area) {
   if (card.tour) return tourWidget(area, card.tour);
   if (card.demo?.values) return valuesDemo(area, card.demo);
   if (card.demo?.calc) return calcDemo(area, card.demo);
+  if (card.demo?.program) return programDemo(area, card.demo);
   if (card.try) return tryWidget(area, card.try);
   if (card.soroban) return staticSoroban(area, card.soroban);
   return null;
@@ -117,8 +120,10 @@ function tourWidget(area, parts) {
 function valuesDemo(area, demo) {
   const steps = demo.values;
   const maxV = Math.max(...steps.map((s) => s.v));
+  const dec = demo.unit || 0;
   const sv = new SorobanView(area, {
-    interactive: false, showValue: true, tools: ['value', 'zoom'], zoom: !demo.full, minRods: digitCount(maxV)
+    interactive: false, showValue: true, tools: ['value', 'zoom'], zoom: !demo.full, minRods: Math.max(digitCount(maxV), dec + 1),
+    dec, unit: dec ? dec : null
   });
   const caption = h('div', { class: 'caption' });
   let i = 0;
@@ -138,19 +143,22 @@ function valuesDemo(area, demo) {
 function calcDemo(area, demo) {
   const seq = [];
   let maxV = 0;
+  const dec = demo.unit || 0;
+  const fmt = (x) => fmtScaled(x, dec);
   for (const ex of demo.calc) {
     const terms = [ex.start, ...ex.ops];
-    const expr = exprText(terms);
-    const ds = demoSteps(ex.start, ex.ops);
+    const expr = dec ? terms.map((t, i) => (i === 0 ? fmt(t) : (t < 0 ? ' − ' : ' + ') + fmt(Math.abs(t)))).join('') : exprText(terms);
+    const ds = demoSteps(ex.start, ex.ops, undefined, rodNamer(dec));
     let run = ex.start;
     maxV = Math.max(maxV, run);
     for (const t of ex.ops) { run += t; maxV = Math.max(maxV, run); }
     seq.push({ type: 'reset', expr, head: `მაგალითი: ${expr}`, text: 'ვიწყებთ სუფთა სორობანით. დააჭირე „შემდეგ ნაბიჯს“.' });
     for (const s of ds.steps) seq.push({ type: 'move', expr, moves: s.moves, head: s.head, text: s.text, place: s.place });
-    seq.push({ type: 'end', expr, head: `${expr} = ${formatNumber(ds.result)}`, text: '✓ პასუხი სორობანზე წერია.' });
+    seq.push({ type: 'end', expr, head: `${expr} = ${dec ? fmt(ds.result) : formatNumber(ds.result)}`, text: '✓ პასუხი სორობანზე წერია.' });
   }
   const sv = new SorobanView(area, {
-    interactive: false, showValue: true, tools: ['value', 'zoom'], zoom: true, minRods: Math.max(2, digitCount(maxV))
+    interactive: false, showValue: true, tools: ['value', 'zoom'], zoom: true, minRods: Math.max(2, digitCount(maxV), dec + 1),
+    dec, unit: dec ? dec : null
   });
   const exprEl = h('div', { class: 'demo-expr' });
   const headEl = h('div', { class: 'caption-head' });
@@ -181,14 +189,64 @@ function calcDemo(area, demo) {
   return { destroy: () => sv.destroy() };
 }
 
-function tryWidget(area, { target }) {
-  const status = h('div', { class: 'caption' }, `ჩაწერე: ${formatNumber(target)}`);
+// გამრავლება/გაყოფის დემო (片落とし): ▼ — სად იწერება პირველი რიცხვის ერთეულები, ▲ — პასუხის ერთეულები
+function programDemo(area, demo) {
+  const seq = [];
+  let top = 2;
+  let anchor = 0;
+  for (const ex of demo.program) {
+    const prog = ex.mul ? mulProgram(ex.mul) : divProgram(ex.div);
+    const spec = ex.mul || ex.div;
+    const aShow = fmtScaled(spec.a, spec.aDec || 0);
+    const expr = ex.mul ? `${aShow} × ${fmtScaled(spec.b, spec.bDec || 0)}` : `${aShow} : ${spec.b}`;
+    anchor = spec.place;
+    top = Math.max(top, String(prog.answerBoard).length, String(prog.steps[0].after).length, prog.unit + 1, spec.place + 1);
+    seq.push({ type: 'reset', expr, anchor: spec.place, unit: prog.unit, head: `მაგალითი: ${expr}`,
+      text: `▼ — ${ex.mul ? 'პირველი თანამამრავლის' : 'გასაყოფის'} ერთეულები (${rodLabel(spec.place)}). ▲ — პასუხის ერთეულები (${rodLabel(prog.unit)}).` });
+    for (const st of prog.steps) {
+      seq.push({ type: 'intro', expr, head: st.instr, text: st.hint, rods: st.rods });
+      for (const m of st.micro) seq.push({ type: 'move', expr, head: st.instr, text: m.text, moves: m.moves, place: m.place });
+    }
+    seq.push({ type: 'end', expr, head: `${expr} = ${ex.answer}`, text: ex.read || '✓ პასუხი ▲ ღეროდან იკითხება.' });
+  }
   const sv = new SorobanView(area, {
-    interactive: true, showValue: false, tools: ['clear', 'value', 'zoom'], minRods: digitCount(target),
+    interactive: false, showValue: false, tools: ['zoom'], zoom: true, minRods: top, anchor
+  });
+  const exprEl = h('div', { class: 'demo-expr' });
+  const headEl = h('div', { class: 'caption-head' });
+  const textEl = h('div', { class: 'caption-text' });
+  let i = 0;
+  const ctl = stepControls(() => start(), () => i < seq.length - 1 && apply(i + 1));
+  area.prepend(exprEl);
+  area.append(h('div', { class: 'caption' }, headEl, textEl), ctl.el);
+  function apply(k) {
+    i = k;
+    const s = seq[k];
+    if (s.type === 'reset') { sv.clear(); sv.setFocus([]); sv.setMarkers({ anchor: s.anchor, unit: s.unit }); }
+    else if (s.type === 'intro') sv.setFocus(s.rods || []);
+    else if (s.type === 'move') { sv.setFocus([s.place]); sv.applyMoves(s.moves); }
+    else sv.setFocus([]);
+    exprEl.textContent = s.expr;
+    headEl.textContent = s.head;
+    textEl.textContent = s.text;
+    ctl.counter.textContent = `${k + 1} / ${seq.length}`;
+    ctl.nextBtn.disabled = k === seq.length - 1;
+  }
+  function start() { sv.clear(); apply(0); }
+  start();
+  return { destroy: () => sv.destroy() };
+}
+
+function tryWidget(area, { target, unit = 0 }) {
+  const show = unit ? fmtScaled(target, unit) : formatNumber(target);
+  const status = h('div', { class: 'caption' }, `ჩაწერე: ${show}`);
+  const sv = new SorobanView(area, {
+    interactive: true, showValue: false, tools: ['clear', 'value', 'zoom'], minRods: Math.max(digitCount(target), unit + 1),
+    dec: unit, unit: unit ? unit : null,
     onChange: (v) => {
       const ok = v === target;
       status.classList.toggle('good', ok);
-      status.textContent = ok ? '✓ სწორია! შეგიძლია გადახვიდე შემდეგზე.' : `ჩაწერე: ${formatNumber(target)}`;
+      status.textContent = ok ? '✓ სწორია! შეგიძლია გადახვიდე შემდეგზე.' : `ჩაწერე: ${show}`;
     }
   });
   area.append(status);

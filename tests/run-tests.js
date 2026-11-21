@@ -3,6 +3,7 @@
 // 2) ფორმულების ძრავა: დამოუკიდებელი შემმოწმებელი (მძივების ხელმისაწვდომობით) + ნაბიჯების ფიზიკური შესრულება
 // 3) გენერატორი: თითო დონეზე (თითო სპეციფიკაციაზე) 500 მაგალითი — მხოლოდ ნასწავლი ფორმულები, სწორი პასუხი
 // 4) გაკვეთილების დემოები, პროგრესი, sw.js ქეშის სია, manifest, ფარდობითი მისამართები
+// 5) ეტაპი 2: 片落とし გამრავლება/გაყოფა დამოუკიდებელი სიმულაციით, 500 მაგალითი თითო ახალ ტიპზე, ათწილადები
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, normalize } from 'node:path';
@@ -11,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { Soroban, toDigits, MAX_RODS } from '../js/soroban.js';
 import { analyze, hintFor, demoSteps } from '../js/techniques.js';
 import { generateProblem, buildSet, makeRng, problemKey } from '../js/generator.js';
-import { LEVELS, getLevel, testSize, TEST_SIZE } from '../js/levels.js';
+import { LEVELS, getLevel, testSize, TEST_SIZE, levelLabel } from '../js/levels.js';
+import { mulProgram, divProgram, programFor, fmtScaled, parseScaled } from '../js/muldiv.js';
 import { LESSONS } from '../js/lessons.js';
 import { Progress, memoryStorage, PROGRESS_KEY } from '../js/progress.js';
 
@@ -280,7 +282,7 @@ function checkCalcProblem(p, level, specLabel) {
   return seen;
 }
 
-for (const level of LEVELS.filter((l) => l.built)) {
+for (const level of LEVELS.filter((l) => l.built && typeof l.id === 'number')) {
   test(`გენერატორი: დონე ${level.id} — ${N_PER_SPEC} მაგალითი თითო სპეციფიკაციაზე`, () => {
     const specs = [
       ...level.guided.map((s) => ['guided', s]),
@@ -346,17 +348,19 @@ test('გენერატორი: ტესტი = 20 მაგალით
   }
 });
 
-test('დონეები: კონფიგურაცია (0–10 სრული გეგმა, 0–4 აწყობილი, დროის ლიმიტი 3–4)', () => {
-  assert(LEVELS.length === 11, 'დონეების რაოდენობა 11 უნდა იყოს');
-  LEVELS.forEach((l, i) => assert(l.id === i && l.title, `დონე ${i}`));
-  for (let i = 0; i <= 4; i++) assert(getLevel(i).built, `დონე ${i} აწყობილი უნდა იყოს`);
-  for (let i = 5; i <= 10; i++) assert(!getLevel(i).built, `დონე ${i} დაბლოკილი უნდა იყოს`);
+test('დონეები: კონფიგურაცია (სრული გეგმა 0–10, აწყობილი 0–4 და 5ა–8ბ, 9–10 დაბლოკილი)', () => {
+  const ids = LEVELS.map((l) => String(l.id));
+  const expected = ['0', '1', '2', '3', '4', '5a', '5b', '6a', '6b', '6c', '7a', '7b', '7c', '8a', '8b', '9', '10'];
+  assert(JSON.stringify(ids) === JSON.stringify(expected), `დონეების რიგი: ${ids.join(',')}`);
+  for (const id of expected.slice(0, 15)) assert(getLevel(id).built, `დონე ${id} აწყობილი უნდა იყოს`);
+  assert(!getLevel(9).built && !getLevel(10).built, 'დონეები 9–10 დაბლოკილი უნდა დარჩეს');
   for (let i = 0; i <= 2; i++) assert(getLevel(i).test.maxAvgSec === null, `დონე ${i}: დროის ლიმიტი არ უნდა იყოს`);
   for (let i = 3; i <= 4; i++) assert(getLevel(i).test.maxAvgSec === 10, `დონე ${i}: ლიმიტი 10 წმ`);
+  assert(getLevel('5a').test.maxAvgSec > 0 && getLevel('5b').test.maxAvgSec > 0, 'დონე 5: ტესტში დროის ლიმიტი');
   // ფორმულები თანმიმდევრულად ემატება: ყოველი დონე წინას ნასწავლს მოიცავს
-  for (let i = 2; i <= 4; i++) {
-    const prev = new Set(getLevel(i - 1).allowed);
-    assert([...prev].every((t) => getLevel(i).allowed.includes(t)), `დონე ${i}: წინა დონის ფორმულები აკლია`);
+  for (let i = 1; i < 15; i++) {
+    const prev = new Set(getLevel(expected[i - 1]).allowed);
+    assert([...prev].every((t) => getLevel(expected[i]).allowed.includes(t)), `დონე ${expected[i]}: წინა დონის ფორმულები აკლია`);
   }
 });
 
@@ -495,6 +499,327 @@ test('JS მოდულები: იმპორტები არსებ�
   }
   const css = readFileSync(join(ROOT, 'css/style.css'), 'utf8');
   assert(!/@import|url\(\s*['"]?https?:/.test(css), 'CSS: გარე რესურსი');
+});
+
+// =====================================================================
+// ეტაპი 2: სვეტები, ტაბულა, გამრავლება, გაყოფა, ათწილადები
+// =====================================================================
+
+// ---- დამოუკიდებელი 片落とし სიმულაცია (ღეროების მასივით, ძრავის კოდისგან ცალკე დაწერილი) ----
+// board: ციფრების მასივი, ინდექსი = ღერო (0 = ყველაზე მარჯვენა)
+function rodsOf(v) { return toDigits(v, MAX_RODS); }
+function valueOf(r) { let v = 0; for (let p = MAX_RODS - 1; p >= 0; p--) v = v * 10 + r[p]; return v; }
+function digitsLowHigh(n) { return String(n).split('').reverse().map(Number); }
+
+// გამრავლება: წესები სიტყვასიტყვით —
+//  (1) პირველი თანამამრავლის ერთეულები ▼ ღეროზე (ათწილადისას ბოლო ციფრი ▼-დან aDec ღეროთი მარჯვნივ);
+//  (2) მარჯვენა ციფრიდან: ციფრს ვხსნით, ნამრავლი მეორე თანამამრავლის ყოველ ციფრზე (მარცხნიდან) — ორნიშნად,
+//      პირველის ათეულები ციფრის ღეროზე, ყოველი შემდეგი ერთი ღეროთი მარჯვნივ;
+//  (3) პასუხის ერთეულები = ▼ − (მეორე თანამამრავლის მთელი ციფრები).
+function refMul(a, b, place, aDec = 0, bDec = 0) {
+  const seq = [];
+  let board = 0;
+  const aLow = place - aDec;
+  board += a * 10 ** aLow; seq.push(board);
+  const ad = digitsLowHigh(a), bd = digitsLowHigh(b).reverse(); // bd: მარცხნიდან მარჯვნივ
+  ad.forEach((d, i) => {
+    const rod = aLow + i;
+    if (d === 0) return;
+    board -= d * 10 ** rod; seq.push(board);
+    bd.forEach((bj, k) => {
+      const prod = d * bj;
+      const tensRod = rod - k;            // k-ე ნამრავლი k ღეროთი მარჯვნივ იწყება
+      if (prod) { board += prod * 10 ** (tensRod - 1); seq.push(board); }
+    });
+  });
+  const unit = place - (bd.length - bDec);
+  return { seq, board, unit };
+}
+
+// გაყოფა: წესები —
+//  (1) გასაყოფის ერთეულები ▼ ღეროზე; განაყოფის ერთეულები ▲ = ▼ + (გამყოფის ციფრები + 1);
+//  (2) გასაყოფის (დარჩენილის) პირველი ციფრებიდან: თუ გამყოფი ≤ იმავე რაოდენობის პირველ ციფრებზე — ციფრი 2 ღეროთი
+//      მარცხნივ, თუ არა — ერთით მეტი ციფრი და ციფრი მეზობელ ღეროზე;
+//  (3) ნამრავლი (ციფრი × გამყოფი) აკლდება განაყოფის ციფრის მარჯვენა ღეროდან; ვჩერდებით, როცა ციფრი stopRod-ზე დაბლა ხვდება.
+function refDiv(a, b, place, aDec = 0, decimals = 0) {
+  const n = String(b).length;
+  const unit = place + n + 1;
+  const stop = unit - decimals;
+  const qRods = new Array(MAX_RODS).fill(0);
+  let rem = rodsOf(a * 10 ** (place - aDec));
+  const seq = [valueOf(rem)];
+  const placements = [];
+  for (let g = 0; g < 50; g++) {
+    let head = -1;
+    for (let p = MAX_RODS - 1; p >= 0; p--) if (rem[p]) { head = p; break; }
+    if (head < 0) break;
+    const lead = (len) => { let v = 0; for (let k = 0; k < len; k++) { const p = head - k; v = v * 10 + (p >= 0 ? rem[p] : 0); } return v; };
+    let qRod, chunk;
+    if (lead(n) >= b) { qRod = head + 2; chunk = lead(n); } else { qRod = head + 1; chunk = lead(n + 1); }
+    if (qRod < stop || qRod - n - 1 < 0) break;
+    const q = Math.floor(chunk / b);
+    assert(q >= 1 && q <= 9, `refDiv: ციფრი ${q}`);
+    assert(qRods[qRod] === 0, 'refDiv: განაყოფის ღერო დაკავებულია');
+    qRods[qRod] = q;
+    placements.push({ q, qRod, head });
+    seq.push(valueOf(qRods) + valueOf(rem));
+    // ნამრავლი გამყოფის ყოველ ციფრზე, მარცხნიდან; პირველის ათეულები qRod−1-ზე
+    const bd = String(b).split('').map(Number);
+    let remVal = valueOf(rem);
+    bd.forEach((bj, k) => {
+      const prod = q * bj;
+      if (prod) { remVal -= prod * 10 ** (qRod - 2 - k); seq.push(valueOf(qRods) + remVal); }
+    });
+    assert(remVal >= 0, 'refDiv: ნაშთი უარყოფითი');
+    rem = rodsOf(remVal);
+  }
+  return { seq, unit, qBoard: valueOf(qRods), remBoard: valueOf(rem), placements };
+}
+
+function executeProgram(prog) {
+  const sb = new Soroban(MAX_RODS);
+  for (const st of prog.steps) {
+    assert(sb.value === st.before, `ნაბიჯი იწყება ${st.before}-დან, სორობანზე კი ${sb.value}`);
+    for (const m of st.micro) for (const mv of m.moves) sb.applyMove(mv);
+    assert(sb.value === st.after, `ნაბიჯის შემდეგ ${sb.value} ≠ ${st.after}`);
+    assert(st.instr && st.hint, 'ნაბიჯს წარწერა/მინიშნება აკლია');
+  }
+  return sb.value;
+}
+
+function checkMul(p, label) {
+  const prog = programFor(p);
+  const ref = refMul(p.a, p.b, p.place, p.aDec || 0, p.bDec || 0);
+  const engSeq = [prog.steps[0].after, ...prog.steps.slice(1).map((s) => s.after)];
+  assert(JSON.stringify(engSeq) === JSON.stringify(ref.seq), `${label}: ნაბიჯები არ ემთხვევა შემმოწმებელს`);
+  assert(prog.unit === ref.unit && p.ansUnit === ref.unit, `${label}: ერთეულის ღერო ${prog.unit} ≠ ${ref.unit}`);
+  assert(executeProgram(prog) === ref.board, `${label}: ფიზიკური შესრულება`);
+  // პასუხის წაკითხვა ▲ ღეროდან: board = answer × 10^(unit − ansDec)
+  const ansDec = (p.aDec || 0) + (p.bDec || 0);
+  assert(p.answer === p.a * p.b && p.ansDec === ansDec, `${label}: პასუხი`);
+  assert(ref.board === p.answer * 10 ** (ref.unit - ansDec), `${label}: პასუხი ▲ ღეროდან არ იკითხება`);
+  return prog;
+}
+
+function checkDiv(p, label) {
+  const prog = programFor(p);
+  const ref = refDiv(p.a, p.b, p.place, p.aDec || 0, p.qDec || 0);
+  const engSeq = prog.steps.map((s) => s.after);
+  assert(JSON.stringify(engSeq) === JSON.stringify(ref.seq), `${label}: ნაბიჯები არ ემთხვევა შემმოწმებელს`);
+  assert(prog.unit === ref.unit && p.ansUnit === ref.unit, `${label}: ერთეულის ღერო`);
+  assert(executeProgram(prog) === ref.qBoard + ref.remBoard, `${label}: ფიზიკური შესრულება`);
+  // არითმეტიკა: a / 10^aDec = b·q/10^qDec + r/10^aDec  →  a = b·q + r (qDec = aDec)
+  assert(p.a === p.b * p.q + p.r && p.r >= 0 && p.r < p.b, `${label}: ${p.a} ≠ ${p.b}·${p.q} + ${p.r}`);
+  assert(ref.qBoard === p.q * 10 ** (ref.unit - (p.qDec || 0)), `${label}: განაყოფი ▲ ღეროდან არ იკითხება`);
+  assert(ref.remBoard === p.r * 10 ** (p.place - (p.aDec || 0)), `${label}: ნაშთი არასწორ ადგილასაა`);
+  for (const pl of ref.placements) assert(pl.qRod === pl.head + 1 || pl.qRod === pl.head + 2, `${label}: ციფრის ადგილი`);
+  return prog;
+}
+
+test('片落とし: წყაროების მაგალითები (12×34, 4116:42, 862:15, 18:2, 0,84:4)', () => {
+  const m = mulProgram({ a: 12, b: 34, place: 3 });
+  assert(m.answerBoard === 4080 && m.unit === 1, `12×34: ${m.answerBoard}, ▲=${m.unit}`);
+  const d1 = divProgram({ a: 4116, b: 42, place: 0 });
+  assert(d1.unit === 3 && d1.qBoard === 98000 && d1.remBoard === 0, '4116:42 = 98');
+  assert(d1.qDigits[0].qRod === 4 && !d1.qDigits[0].divides, '4116:42 — 9 მეზობელ ღეროზე (41 < 42)');
+  const d2 = divProgram({ a: 862, b: 15, place: 0 });
+  assert(d2.qBoard === 57000 && d2.remBoard === 7, '862:15 = 57, ნაშთი 7');
+  const d3 = divProgram({ a: 18, b: 2, place: 0 });
+  assert(d3.unit === 2 && d3.qBoard === 900, '18:2 — 9 მარცხნივ მეორე ღეროზე');
+  const d4 = divProgram({ a: 84, b: 4, place: 3, aDec: 2, decimals: 2 });
+  assert(d4.qBoard === 21000 && d4.unit === 5, '0,84:4 = 0,21');
+  const d5 = divProgram({ a: 84, b: 4, place: 0 });
+  assert(d5.qDigits.every((q) => q.divides), '84:4 — ორივე ციფრი „იყოფა“ (2 ღეროთი მარცხნივ)');
+});
+
+test('片落とし: ამომწურავი შემოწმება — 10–999 × 2–99 და გაყოფა 2–99-ზე', () => {
+  let nm = 0, nd = 0;
+  for (let a = 10; a <= 999; a += 7) for (let b = 2; b <= 99; b++) {
+    checkMul({ kind: 'mul', a, b, place: 3, aDec: 0, bDec: 0, ansUnit: 3 - String(b).length, answer: a * b, ansDec: 0 }, `${a}×${b}`);
+    nm++;
+  }
+  for (let b = 2; b <= 99; b++) for (let a = b; a <= 9999; a += 13) {
+    const q = Math.floor(a / b), r = a % b;
+    checkDiv({ kind: 'div', a, b, place: 0, aDec: 0, qDec: 0, ansUnit: String(b).length + 1, q, r }, `${a}:${b}`);
+    nd++;
+  }
+  note(`${nm.toLocaleString('en-US')} გამრავლება, ${nd.toLocaleString('en-US')} გაყოფა`);
+});
+
+const STAGE2 = ['5a', '5b', '6a', '6b', '6c', '7a', '7b', '7c', '8a', '8b'];
+
+function checkStage2Problem(p, spec, level, label) {
+  assert(p.kind === spec.kind && String(p.level) === String(level.id), `${label}: kind/level`);
+  const lid = String(level.id);
+  if (p.kind === 'calc' || p.kind === 'column') {
+    assert(p.terms.length === (spec.terms || 2), `${label}: რიცხვების რაოდენობა`);
+    let total = p.terms[0];
+    assert(total > 0, `${label}: პირველი რიცხვი`);
+    for (let i = 1; i < p.terms.length; i++) {
+      const a = analyze(total, p.terms[i]);
+      assert(a.ok && executeSteps(total, a) === total + p.terms[i], `${label}: ნაბიჯები`);
+      total += p.terms[i];
+      assert(total > 0, `${label}: შუალედური შედეგი ≤ 0`);
+    }
+    assert(p.answer === total, `${label}: პასუხი`);
+    if (spec.unit) {
+      assert(p.unit === spec.unit, `${label}: ერთეულის ღერო`);
+      for (const t of p.terms) assert(Math.abs(t) % 10 ** (spec.unit - spec.dec) === 0, `${label}: მძიმის შემდეგ მეტი ციფრია, ვიდრე ${spec.dec}`);
+    } else {
+      assert(!p.unit, `${label}: ათწილადი ჯერ არ არის ნასწავლი`);
+      for (const t of p.terms) {
+        const d = String(Math.abs(t)).length;
+        assert(d <= spec.digits && (t === p.terms[0] ? d >= (spec.minDigits || 1) : true), `${label}: ნიშნები ${t}`);
+      }
+    }
+  } else if (p.kind === 'read' || p.kind === 'set') {
+    assert(p.unit === spec.unit && p.answer === p.value && p.value > 0, `${label}: ათწილადი`);
+    assert(p.value % 10 ** (spec.unit - spec.dec) === 0, `${label}: მძიმის შემდეგ ციფრები`);
+    assert(parseScaled(fmtScaled(p.value, p.unit), p.unit) === p.value, `${label}: ჩვენება/წაკითხვა`);
+  } else if (p.kind === 'table') {
+    assert(spec.rows.includes(p.a) && p.b >= spec.from && p.b <= spec.to && p.answer === p.a * p.b, `${label}: ტაბულა`);
+  } else if (p.kind === 'mul') {
+    const [mn, mx] = spec.aDigits;
+    const ad = String(p.a).length;
+    assert(ad >= mn && ad <= mx, `${label}: პირველი თანამამრავლის ნიშნები`);
+    assert(String(p.b).length === spec.bDigits, `${label}: მეორე თანამამრავლი — ${spec.bDigits}-ნიშნა უნდა იყოს (${p.b})`);
+    assert((p.aDec || 0) === (spec.aDec || 0) && (p.bDec || 0) === (spec.bDec || 0), `${label}: ათწილადი`);
+    checkMul(p, label);
+  } else if (p.kind === 'div') {
+    assert(String(p.b).length === spec.bDigits, `${label}: გამყოფი — ${spec.bDigits}-ნიშნა უნდა იყოს`);
+    const qd = String(p.q).length;
+    assert(qd >= spec.qDigits[0] && qd <= spec.qDigits[1], `${label}: განაყოფის ნიშნები ${p.q}`);
+    if (spec.rem) assert(p.r > 0, `${label}: ნაშთი უნდა იყოს`);
+    else assert(p.r === 0, `${label}: ნაშთი ჯერ არ არის ნასწავლი (${p.a}:${p.b})`);
+    assert((p.qDec || 0) === (spec.qDec || 0), `${label}: ათწილადი განაყოფი`);
+    checkDiv(p, label);
+  } else {
+    throw new Error(`${label}: უცნობი ტიპი ${p.kind}`);
+  }
+  // „მხოლოდ ნასწავლი ხერხები“ ქვედონეების მიხედვით
+  const order = STAGE2.indexOf(lid);
+  if (order < STAGE2.indexOf('6a')) assert(!['table', 'mul', 'div'].includes(p.kind), `${label}: გამრავლება/გაყოფა ჯერ არ არის ნასწავლი`);
+  if (order < STAGE2.indexOf('6c') && p.kind === 'mul') assert(String(p.b).length === 1, `${label}: ორნიშნა მამრავლი ჯერ არ არის ნასწავლი`);
+  if (order < STAGE2.indexOf('7a')) assert(p.kind !== 'div', `${label}: გაყოფა ჯერ არ არის ნასწავლი`);
+  if (order < STAGE2.indexOf('7b') && p.kind === 'div') assert(String(p.b).length === 1, `${label}: ორნიშნა გამყოფი ჯერ არ არის ნასწავლი`);
+  if (order < STAGE2.indexOf('7c') && p.kind === 'div') assert(p.r === 0, `${label}: ნაშთი ჯერ არ არის ნასწავლი`);
+  if (order < STAGE2.indexOf('8a')) assert(!p.unit && !p.aDec && !p.bDec && !p.qDec, `${label}: ათწილადები ჯერ არ არის ნასწავლი`);
+}
+
+for (const lid of STAGE2) {
+  test(`გენერატორი: დონე ${levelLabel(getLevel(lid))} — ${N_PER_SPEC} მაგალითი თითო სპეციფიკაციაზე`, () => {
+    const level = getLevel(lid);
+    const specs = [
+      ...level.guided.map((s) => ['guided', s]),
+      ...level.tasks.map((s) => ['tasks', s]),
+      ...level.test.items.map((s) => ['test', s])
+    ];
+    let total = 0;
+    const kinds = {};
+    specs.forEach(([mode, spec], si) => {
+      const rng = makeRng(7000 + STAGE2.indexOf(lid) * 100 + si);
+      const label = `დ${lid} ${mode} ${JSON.stringify(spec)}`;
+      for (let i = 0; i < N_PER_SPEC; i++) {
+        const p = generateProblem(spec, level, rng);
+        checkStage2Problem(p, spec, level, label);
+        kinds[p.kind] = (kinds[p.kind] || 0) + 1;
+        total++;
+      }
+    });
+    note(`${total} მაგალითი · ${Object.entries(kinds).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+  });
+}
+
+test('ეტაპი 2: შემმოწმებელი იჭერს დარღვევებს (უარყოფითი ტესტი)', () => {
+  const L = (id) => getLevel(id);
+  const mulSpec1 = { kind: 'mul', aDigits: [2, 2], bDigits: 1, place: 3 };
+  const divSpec1 = { kind: 'div', bDigits: 1, qDigits: [2, 2], place: 0 };
+  const bad = [
+    ['6b', mulSpec1, { kind: 'mul', a: 23, b: 45, aDec: 0, bDec: 0, place: 3, ansUnit: 1, answer: 1035, ansDec: 0, level: '6b' }, 'ორნიშნა მამრავლი 6ბ-ზე'],
+    ['6b', mulSpec1, { kind: 'mul', a: 23, b: 4, aDec: 0, bDec: 0, place: 3, ansUnit: 3, answer: 92, ansDec: 0, level: '6b' }, 'არასწორი ერთეულის ღერო (▲)'],
+    ['6b', mulSpec1, { kind: 'mul', a: 23, b: 4, aDec: 0, bDec: 0, place: 3, ansUnit: 2, answer: 93, ansDec: 0, level: '6b' }, 'არასწორი პასუხი'],
+    ['6b', mulSpec1, { kind: 'mul', a: 23, b: 4, aDec: 1, bDec: 0, place: 3, ansUnit: 2, answer: 92, ansDec: 1, level: '6b' }, 'ათწილადი 6ბ-ზე'],
+    ['7a', divSpec1, { kind: 'div', a: 87, b: 4, aDec: 0, qDec: 0, place: 0, ansUnit: 2, q: 21, r: 3, answer: 21, level: '7a' }, 'ნაშთი 7ა-ზე'],
+    ['7a', divSpec1, { kind: 'div', a: 84, b: 4, aDec: 0, qDec: 0, place: 0, ansUnit: 3, q: 21, r: 0, answer: 21, level: '7a' }, 'განაყოფის არასწორი ▲'],
+    ['7a', divSpec1, { kind: 'div', a: 84, b: 4, aDec: 0, qDec: 0, place: 0, ansUnit: 2, q: 22, r: 0, answer: 22, level: '7a' }, 'არასწორი განაყოფი'],
+    ['5a', { kind: 'calc', minDigits: 2, digits: 2, terms: 3, ops: 'both' }, { kind: 'calc', terms: [40, -50, 30], answer: 20, level: '5a' }, 'უარყოფითი შუალედური შედეგი']
+  ];
+  for (const [id, spec, prob, label] of bad) {
+    let threw = false;
+    try { checkStage2Problem(prob, spec, L(id), 'neg'); } catch (e) { threw = true; }
+    assert(threw, `შემმოწმებელმა ვერ დაიჭირა: ${label}`);
+  }
+  // თავად შემმოწმებელიც არ უნდა ემთხვეოდეს „სხვა“ წესს: ნამრავლი ციფრის მარჯვნივ (ათეულები r−1-ზე) — სხვა სისტემაა
+  const wrongRule = mulProgram({ a: 23, b: 4, place: 4 }).answerBoard; // ერთი ღეროთი გადაწეული
+  assert(wrongRule !== refMul(23, 4, 3).board, 'გადაწეული განლაგება უნდა განსხვავდებოდეს');
+  note(`${bad.length} დარღვევა დაჭერილია`);
+});
+
+test('ეტაპი 2: გაკვეთილების ყველა დემო ფიზიკურად სრულდება და სწორ პასუხს იძლევა', () => {
+  let n = 0;
+  for (const lid of STAGE2) {
+    const cards = LESSONS[lid];
+    assert(Array.isArray(cards) && cards.length >= 4, `დონე ${lid}: გაკვეთილი აკლია`);
+    for (const c of cards) {
+      assert(c.title && Array.isArray(c.text) && c.text.length, `დონე ${lid}: ბარათი`);
+      for (const ex of c.demo?.program || []) {
+        const spec = ex.mul || ex.div;
+        const prog = ex.mul ? mulProgram(ex.mul) : divProgram(ex.div);
+        const final = executeProgram(prog);
+        let expected;
+        if (ex.mul) {
+          const ref = refMul(spec.a, spec.b, spec.place, spec.aDec || 0, spec.bDec || 0);
+          assert(final === ref.board && prog.unit === ref.unit, `„${c.title}“: გამრავლების დემო`);
+          expected = fmtScaled(spec.a * spec.b, (spec.aDec || 0) + (spec.bDec || 0));
+        } else {
+          const ref = refDiv(spec.a, spec.b, spec.place, spec.aDec || 0, spec.decimals || 0);
+          assert(final === ref.qBoard + ref.remBoard && prog.unit === ref.unit, `„${c.title}“: გაყოფის დემო`);
+          const qv = Math.floor(spec.a / spec.b), r = spec.a % spec.b;
+          expected = fmtScaled(qv, spec.decimals || 0) + (r ? `, ნაშთი ${r}` : '');
+          assert(ref.qBoard === qv * 10 ** (ref.unit - (spec.decimals || 0)), `„${c.title}“: განაყოფი`);
+        }
+        assert(ex.answer.replace(/\s| /g, '') === expected.replace(/\s| /g, ''), `„${c.title}“: დემოს პასუხი „${ex.answer}“ ≠ ${expected}`);
+        n++;
+      }
+      if (c.demo?.calc) {
+        for (const ex of c.demo.calc) {
+          const ds = demoSteps(ex.start, ex.ops);
+          const sb = new Soroban();
+          for (const s of ds.steps) for (const m of s.moves) sb.applyMove(m);
+          assert(sb.value === ex.ops.reduce((x, y) => x + y, ex.start), `„${c.title}“: გამოთვლის დემო`);
+          n++;
+        }
+      }
+      if (c.try) assert(Number.isInteger(c.try.target) && c.try.target > 0, `try ${c.title}`);
+    }
+  }
+  note(`${n} დემო`);
+});
+
+test('ათწილადები: ჩვენება და წაკითხვა მძიმით', () => {
+  const cases = [[12500, 3, '12,5'], [3070, 3, '3,07'], [4250, 3, '4,25'], [7, 3, '0,007'], [5000, 3, '5'], [123456, 3, '123,456']];
+  for (const [v, d, s] of cases) {
+    assert(fmtScaled(v, d) === s, `fmtScaled(${v}) = ${fmtScaled(v, d)}, მოსალოდნელი ${s}`);
+    assert(parseScaled(s, d) === v, `parseScaled(${s})`);
+  }
+  assert(parseScaled('12.5', 3) === 12500 && parseScaled('2,', 3) === 2000, 'წერტილი/ცარიელი წილადი');
+  assert(parseScaled('1,2345', 3) === null && parseScaled('abc', 3) === null, 'არასწორი შეყვანა');
+});
+
+test('პროგრესი: ქვედონეები რიგრიგობით იხსნება, 9–10 დაბლოკილი რჩება', () => {
+  const pr = new Progress(memoryStorage(), () => new Date(2026, 10, 25, 10));
+  for (let i = 0; i <= 4; i++) pr.recordSession({ level: i, mode: 'test', accuracy: 1, avgSec: 3, passed: true });
+  assert(pr.currentLevelId() === '5a' && pr.isUnlocked('5a') && !pr.isUnlocked('5b'), 'დონე 4-ის შემდეგ იხსნება 5ა');
+  for (const id of STAGE2) {
+    assert(pr.isUnlocked(id), `${id} უნდა იყოს გახსნილი`);
+    pr.recordSession({ level: id, mode: 'test', accuracy: 1, avgSec: 3, passed: true });
+  }
+  assert(!pr.isUnlocked(9) && !pr.isUnlocked(10) && pr.currentLevelId() === null, '9–10 დაბლოკილი');
+  // ეტაპი 1-ის შენახული პროგრესი (რიცხვითი გასაღებები) ისევ იკითხება
+  const st = memoryStorage();
+  st.setItem(PROGRESS_KEY, JSON.stringify({ version: 1, levels: { '0': { passed: true }, '4': { passed: true }, '3': { passed: true }, '2': { passed: true }, '1': { passed: true } }, days: {}, mistakes: [] }));
+  const old = new Progress(st);
+  assert(old.isPassed(4) && old.currentLevelId() === '5a', 'ძველი პროგრესი შენარჩუნებულია');
 });
 
 // ---------------- შედეგი ----------------

@@ -33,6 +33,17 @@ export function placeOn(p) {
   return g ? g.slice(0, -2) + 'ზე' : `${p + 1}-ე ღეროზე`;
 }
 
+// ღეროს სახელი წინადადებაში („ერთეულების ღეროზე“). ათწილადებისთვის ერთეულები unit ღეროზეა.
+const DEC_GEN = ['მეათედების', 'მეასედების', 'მეათასედების', 'მეათიათასედების'];
+export function rodNamer(unit = 0) {
+  return (p) => {
+    const k = p - unit;
+    const g = k >= 0 ? PLACE_GEN[k] : DEC_GEN[-k - 1];
+    return g ? `${g} ღეროზე` : `მარჯვნიდან ${p + 1}-ე ღეროზე`;
+  };
+}
+const defaultNamer = rodNamer(0);
+
 export function formulaOf(tech, sign, a) {
   const s = sign > 0 ? '+' : M;
   switch (tech) {
@@ -61,7 +72,7 @@ function signedValue(v) {
 }
 
 // ერთი ფაზის (ერთდროული მოძრაობების) ტექსტი
-export function describeMoves(moves, relBase, multi) {
+export function describeMoves(moves, relBase, multi, nameFn = defaultNamer) {
   const place = moves[0].place;
   const parts = [];
   let delta = 0;
@@ -77,12 +88,12 @@ export function describeMoves(moves, relBase, multi) {
   if (thumbUp && upperDown) finger = 'საჩვენებელი და ცერა თითი ერთდროულად';
   else if (thumbUp) finger = 'ცერა თითი';
   else finger = 'საჩვენებელი თითი';
-  const prefix = multi ? `${PLACE_GEN[place]} ღეროზე: ` : '';
+  const prefix = multi ? `${nameFn(place)}: ` : '';
   return `${prefix}${parts.join(' და ')} (${signedValue(scaled)}) · ${finger}`;
 }
 
 // მთავარი ფუნქცია: start ± |operand| → ნაბიჯები, ოპერაციები, ტეგები
-export function analyze(start, operand, rods = MAX_RODS) {
+export function analyze(start, operand, rods = MAX_RODS, nameFn = defaultNamer) {
   const res = {
     ok: true, error: null, start, operand,
     result: start + operand, ops: [], steps: [], tags: []
@@ -102,7 +113,7 @@ export function analyze(start, operand, rods = MAX_RODS) {
   function makeOp(p, sgn, a, tech, parent) {
     const formula = formulaOf(tech, sgn, a);
     const words = wordsOf(tech, sgn, a);
-    const where = multi ? `${placeOn(p)}: ` : '';
+    const where = multi ? `${nameFn(p)}: ` : '';
     const label = tech === 'direct' ? `${formula}: ${words}` : `${formula} · ${words} (${TECH_SHORT[tech]})`;
     const op = { place: p, sign: sgn, digit: a, tech, nested: !!parent, formula, words, head: where + label };
     op.topHead = parent ? parent.topHead : op.head;
@@ -118,7 +129,7 @@ export function analyze(start, operand, rods = MAX_RODS) {
         place: moves[0].place,
         moves,
         head: op.topHead,
-        text: prefix + describeMoves(moves, owner.place, multi)
+        text: prefix + describeMoves(moves, owner.place, multi, nameFn)
       });
     };
   }
@@ -198,8 +209,8 @@ export function analyze(start, operand, rods = MAX_RODS) {
 }
 
 // მინიშნება მართული სავარჯიშოსთვის: რა ფორმულა სჭირდება ამ მოქმედებას
-export function hintFor(start, operand, rods = MAX_RODS) {
-  const a = analyze(start, operand, rods);
+export function hintFor(start, operand, rods = MAX_RODS, nameFn = defaultNamer) {
+  const a = analyze(start, operand, rods, nameFn);
   if (!a.ok) return { tech: null, text: 'ეს მოქმედება სორობანზე ვერ შესრულდება.', lines: [] };
   const top = a.ops.filter((o) => !o.nested);
   const special = top.find((o) => o.tech !== 'direct');
@@ -229,22 +240,22 @@ export function hintFor(start, operand, rods = MAX_RODS) {
     text = '';
   }
   if (nested) {
-    const nestedText = `10-ის ${nested.sign > 0 ? 'გადატანისას' : 'სესხებისას'} ${placeOn(nested.place)} ფორმულა გჭირდება: ${nested.formula} (${TECH_SHORT[nested.tech] || ''}).`;
+    const nestedText = `10-ის ${nested.sign > 0 ? 'გადატანისას' : 'სესხებისას'} ${nameFn(nested.place)} ფორმულა გჭირდება: ${nested.formula} (${TECH_SHORT[nested.tech] || ''}).`;
     text = text ? `${text} ${nestedText}` : nestedText;
   }
   return { tech: special ? special.tech : nested ? 'nested' : 'direct', text, lines, analysis: a };
 }
 
 // დემონსტრაციის სრული ნაბიჯები: სუფთა სორობანზე start-ის ჩაწერა, შემდეგ ყოველი ოპერანდი
-export function demoSteps(start, operands, rods = MAX_RODS) {
+export function demoSteps(start, operands, rods = MAX_RODS, nameFn = defaultNamer) {
   const steps = [];
-  const first = analyze(0, start, rods);
+  const first = analyze(0, start, rods, nameFn);
   if (!first.ok) throw new Error('დემოს საწყისი რიცხვი არასწორია');
   for (const s of first.steps) steps.push({ ...s, head: `ვწერთ ${start}-ს` });
   let total = start;
   const analyses = [];
   for (const op of operands) {
-    const a = analyze(total, op, rods);
+    const a = analyze(total, op, rods, nameFn);
     if (!a.ok) throw new Error(`დემოს მოქმედება ვერ სრულდება: ${total} ${op}`);
     analyses.push(a);
     for (const s of a.steps) steps.push({ ...s, term: op, before: total });

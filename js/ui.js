@@ -109,23 +109,34 @@ export function confirmDialog(message, { ok = 'დიახ', cancel = 'გა�
   });
 }
 
-// ციფრული კლავიატურა რიცხვის ჩასაწერად
-export function numpad({ onSubmit, maxLen = 7 }) {
+// ციფრული კლავიატურა რიცხვის ჩასაწერად. decimal: true — მძიმის ღილაკით (პასუხი სტრიქონად, მაგ. „12,5“)
+export function numpad({ onSubmit, maxLen = 7, decimal = false }) {
   let value = '';
   const display = h('div', { class: 'np-display', 'aria-live': 'polite' }, ' ');
-  const render = () => { display.textContent = value || ' '; submit.disabled = !value; };
+  const render = () => { display.textContent = value || ' '; submit.disabled = !value || value === ','; };
   const press = (k) => {
     if (k === 'del') value = value.slice(0, -1);
+    else if (k === ',') { if (!value.includes(',')) value = (value || '0') + ','; }
     else if (value.length < maxLen) value = value === '0' ? k : value + k;
     render();
   };
-  const submit = h('button', { class: 'np-key ok', 'aria-label': 'დადასტურება', on: { click: () => value && onSubmit(Number(value)) } }, '✓');
-  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) =>
-    h('button', { class: 'np-key', on: { click: () => press(k) } }, k));
-  keys.push(h('button', { class: 'np-key del', 'aria-label': 'წაშლა', on: { click: () => press('del') } }, '⌫'));
-  keys.push(h('button', { class: 'np-key', on: { click: () => press('0') } }, '0'));
-  keys.push(submit);
-  const el = h('div', { class: 'numpad' }, display, h('div', { class: 'np-grid' }, keys));
+  const submit = h('button', {
+    class: 'np-key ok', 'aria-label': 'დადასტურება',
+    on: { click: () => value && onSubmit(decimal ? value : Number(value)) }
+  }, '✓');
+  const key = (k) => h('button', { class: 'np-key', on: { click: () => press(k) } }, k);
+  const del = h('button', { class: 'np-key del', 'aria-label': 'წაშლა', on: { click: () => press('del') } }, '⌫');
+  let keys;
+  if (decimal) {
+    // 4 სვეტი, რომ ღილაკები 4 მწკრივში დაეტიოს: 1 2 3 ⌫ / 4 5 6 , / 7 8 9 0 / ✓
+    const comma = h('button', { class: 'np-key', 'aria-label': 'მძიმე', on: { click: () => press(',') } }, ',');
+    submit.classList.add('wide');
+    keys = [key('1'), key('2'), key('3'), del, key('4'), key('5'), key('6'), comma, key('7'), key('8'), key('9'), key('0'), submit];
+  } else {
+    keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(key);
+    keys.push(del, key('0'), submit);
+  }
+  const el = h('div', { class: 'numpad' }, display, h('div', { class: decimal ? 'np-grid four' : 'np-grid' }, keys));
   render();
   return {
     el,

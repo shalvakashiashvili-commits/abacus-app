@@ -1,7 +1,7 @@
 // Service worker: პირველივე გახსნისას ყველა ფაილი ქეშირდება, შემდეგ აპლიკაცია სრულად offline-ში მუშაობს.
 // განახლება: შეცვალე CACHE_VERSION (მაგ. abacus-v2) — ძველი ქეში წაიშლება და ახალი ფაილები ჩაიტვირთება.
 
-const CACHE_VERSION = 'abacus-v1';
+const CACHE_VERSION = 'abacus-v2';
 
 const ASSETS = [
   './',
@@ -19,6 +19,7 @@ const ASSETS = [
   './js/progress.js',
   './js/lesson-player.js',
   './js/exercise.js',
+  './js/muldiv.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-192.png',
