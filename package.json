@@ -1,0 +1,11 @@
+{
+  "name": "abacus-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "სორობანის და ანძანის სასწავლო PWA",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run-tests.js",
+    "icons": "node tools/make-icons.mjs"
+  }
+}
