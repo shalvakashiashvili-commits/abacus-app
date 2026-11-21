@@ -1,7 +1,7 @@
 // Service worker: პირველივე გახსნისას ყველა ფაილი ქეშირდება, შემდეგ აპლიკაცია სრულად offline-ში მუშაობს.
 // განახლება: შეცვალე CACHE_VERSION (მაგ. abacus-v2) — ძველი ქეში წაიშლება და ახალი ფაილები ჩაიტვირთება.
 
-const CACHE_VERSION = 'abacus-v3';
+const CACHE_VERSION = 'abacus-v4';
 
 const ASSETS = [
   './',

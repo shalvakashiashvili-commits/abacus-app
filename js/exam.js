@@ -3,7 +3,7 @@
 // ამიტომ ეს ვარჯიშია და არა ოფიციალური გამოცდა.
 
 import { h, confirmDialog, fmtSec, put } from './ui.js';
-import { EXAM_GRADES, getLevel } from './levels.js';
+import { EXAM_GRADES, EXAM_TIME_MODES, DEFAULT_EXAM_TIME_MODE, examMinutes, getLevel } from './levels.js';
 import { buildExam } from './generator.js';
 import { renderProblem, problemLabel } from './exercise.js';
 
@@ -29,8 +29,8 @@ export function renderExamList(root, { progress }) {
     const best = progress.bestExam(g.id);
     put(root, h('a', { class: 'exam-grade', href: `#/exam/${g.id}` },
       h('b', null, `${g.grade}ს მსგავსი`),
-      h('div', { class: 'small muted' }, `${g.sections.map((s) => `${SECTION_TITLE[s.key]} ${s.n}`).join(' · ')} · ${g.minutes} წთ · გასვლა ≥ ${g.pass} / ${g.total}`),
-      best ? h('div', { class: 'small' }, `საუკეთესო: ${best.score} / ${g.total}${best.passed ? ' ✓' : ''}`) : null));
+      h('div', { class: 'small muted' }, `${g.sections.map((s) => `${SECTION_TITLE[s.key]} ${s.n}`).join(' · ')} · ${g.minutes} წთ (გაზრდილი: ${examMinutes(g, 'extended')} წთ) · გასვლა ≥ ${g.pass} / ${g.total}`),
+      best ? h('div', { class: 'small' }, `საუკეთესო: ${best.score} / ${g.total}${best.passed ? ' ✓' : ''} (${(EXAM_TIME_MODES[best.timeMode] || EXAM_TIME_MODES.official).label})`) : null));
   }
 }
 
@@ -42,6 +42,7 @@ export function runExam(root, { grade, progress, onExit }) {
   let current = null;
   let tick = null;
   let endAt = 0;
+  let timeMode = EXAM_TIME_MODES[progress.settings.examTimeMode] ? progress.settings.examTimeMode : DEFAULT_EXAM_TIME_MODE;
   let t0 = 0;
   let destroyed = false;
   let finished = false;
@@ -70,7 +71,12 @@ export function runExam(root, { grade, progress, onExit }) {
     put(body, h('div', { class: 'card' },
       h('h2', null, `${grade.grade}ს მსგავსი გამოცდა`),
       examFormatTable(grade),
-      h('p', null, `დრო: ${grade.minutes} წუთი ყველა სექციაზე ერთად. გასასვლელად: ≥ ${grade.pass} ქულა ${grade.total}-დან.`),
+      h('p', null, `ოფიციალური დრო: ${grade.minutes} წუთი ყველა სექციაზე ერთად. გასასვლელად: ≥ ${grade.pass} ქულა ${grade.total}-დან.`),
+      h('div', { class: 'field' }, h('span', null, 'დროის რეჟიმი:'),
+        h('div', { class: 'radios' }, Object.entries(EXAM_TIME_MODES).map(([key, m]) =>
+          h('label', { class: 'radio' },
+            h('input', { type: 'radio', name: 'examTime', value: key, checked: key === timeMode, on: { change: () => { timeMode = key; progress.setSetting('examTimeMode', key); } } }),
+            `${m.label} — ${examMinutes(grade, key)} წთ`)))),
       h('p', { class: 'small muted' }, 'ამოცანას შეგიძლია გამოტოვო. დროის ამოწურვისას გამოცდა ავტომატურად სრულდება. პასუხის სისწორეს ბოლოს ნახავ.'),
       h('div', { class: 'disclaimer' }, EXAM_DISCLAIMER),
       h('button', { class: 'btn primary wide', on: { click: start } }, 'დაწყება →')));
@@ -78,7 +84,7 @@ export function runExam(root, { grade, progress, onExit }) {
 
   function start() {
     t0 = Date.now();
-    endAt = t0 + grade.minutes * 60 * 1000;
+    endAt = t0 + examMinutes(grade, timeMode) * 60 * 1000;
     tick = setInterval(() => {
       const left = Math.max(0, endAt - Date.now());
       const m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
@@ -134,12 +140,13 @@ export function runExam(root, { grade, progress, onExit }) {
       return { s, ok, pts, n: idx.length };
     });
     const passed = score >= grade.pass;
-    progress.addExam({ grade: grade.id, score, total: grade.total, passed, secs, sections: rows.map((r) => ({ key: r.s.key, ok: r.ok, n: r.n })) });
+    progress.addExam({ grade: grade.id, score, total: grade.total, passed, secs, timeMode, minutes: examMinutes(grade, timeMode), sections: rows.map((r) => ({ key: r.s.key, ok: r.ok, n: r.n })) });
     const wrong = problems.map((p, i) => ({ p, r: results[i] })).filter((x) => !x.r?.correct);
     put(body, h('div', { class: 'card results' },
       h('div', { class: `result-badge ${passed ? 'good' : 'bad'}` }, String(score)),
       h('h2', null, passed ? 'გამსვლელი ქულა მიღწეულია!' : 'გამსვლელი ქულა ჯერ არ არის'),
       h('p', null, `${score} / ${grade.total} (გასვლა ≥ ${grade.pass}) · დრო: ${Math.floor(secs / 60)} წთ ${secs % 60} წმ${timeUp ? ' — დრო ამოიწურა' : ''}`),
+      h('p', { class: 'small muted' }, `რეჟიმი: ${EXAM_TIME_MODES[timeMode].label}, ${examMinutes(grade, timeMode)} წთ`),
       h('table', { class: 'exam-table' }, h('tbody', null, rows.map((r) => h('tr', null,
         h('td', null, r.s.title), h('td', null, `${r.ok} / ${r.n}`), h('td', null, `${r.pts} ქულა`))))),
       h('div', { class: 'disclaimer' }, EXAM_DISCLAIMER),

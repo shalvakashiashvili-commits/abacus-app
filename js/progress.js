@@ -15,7 +15,8 @@ export const DEFAULT_SETTINGS = {
   columnSpeed: 3,       // წამი თითო რიცხვზე სვეტურ ჯამში
   flashSpeed: 1.5,      // წამი თითო რიცხვზე flash anzan-ში (90%+-ის შემდეგ ავტომატურად მცირდება)
   showValue: true,      // მნიშვნელობის ჩვენება ნაგულისხმევად (თავისუფალ სორობანზე)
-  dailyGoalMin: 20
+  dailyGoalMin: 20,
+  examTimeMode: 'extended' // „კენტეის მსგავსი“ გამოცდა: 'extended' (×1,5) ან 'official'
 };
 
 export function memoryStorage() {

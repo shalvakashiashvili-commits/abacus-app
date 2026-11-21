@@ -670,6 +670,18 @@ export function optionalUnlockedBy(id) {
   return LEVELS.filter((l) => l.optional && String(l.requires) === String(id));
 }
 
+// გამოცდის დრო: 'official' — ოფიციალური ცხრილის დრო; 'extended' — ×1,5 (ნაგულისხმევი: ვირტუალური სორობანი ტელეფონზე ნელია)
+export const EXAM_TIME_MODES = {
+  extended: { factor: 1.5, label: 'გაზრდილი დრო (×1,5)' },
+  official: { factor: 1, label: 'ოფიციალური დრო' }
+};
+export const DEFAULT_EXAM_TIME_MODE = 'extended';
+
+export function examMinutes(grade, mode = DEFAULT_EXAM_TIME_MODE) {
+  const m = EXAM_TIME_MODES[mode] || EXAM_TIME_MODES[DEFAULT_EXAM_TIME_MODE];
+  return grade.minutes * m.factor;
+}
+
 export function getExamGrade(id) {
   return EXAM_GRADES.find((g) => g.id === id) || null;
 }

@@ -2,7 +2,7 @@
 
 import { h, toast, confirmDialog, fmtSec, fmtPct, put } from './ui.js';
 import { Progress } from './progress.js';
-import { LEVELS, getLevel, testSize, PASS_ACCURACY, levelLabel, prevBuilt, getExamGrade, EXAM_GRADES } from './levels.js';
+import { LEVELS, getLevel, testSize, PASS_ACCURACY, levelLabel, prevBuilt, getExamGrade, EXAM_GRADES, EXAM_TIME_MODES } from './levels.js';
 import { getLesson } from './lessons.js';
 import { buildSet, shuffle, problemKey } from './generator.js';
 import { renderLesson } from './lesson-player.js';
@@ -397,7 +397,8 @@ function examHistoryCard() {
   return h('section', { class: 'card' }, h('h2', null, 'გამოცდები („კენტეის მსგავსი“)'),
     h('ul', { class: 'mistake-list' }, list.slice(0, 20).map((e) => {
       const g = getExamGrade(e.grade);
-      return h('li', null, `${e.day} · ${g ? g.grade : e.grade}ს მსგავსი: ${e.score} / ${e.total} ${e.passed ? '✓' : '✗'} · ${Math.floor(e.secs / 60)} წთ`);
+      const mode = e.timeMode ? EXAM_TIME_MODES[e.timeMode]?.label : 'ოფიციალური დრო';
+      return h('li', null, `${e.day} · ${g ? g.grade : e.grade}ს მსგავსი: ${e.score} / ${e.total} ${e.passed ? '✓' : '✗'} · ${Math.floor(e.secs / 60)} წთ · ${mode}`);
     })));
 }
 

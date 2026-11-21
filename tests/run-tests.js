@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { Soroban, toDigits, MAX_RODS } from '../js/soroban.js';
 import { analyze, hintFor, demoSteps } from '../js/techniques.js';
 import { generateProblem, buildSet, makeRng, problemKey, buildExam } from '../js/generator.js';
-import { LEVELS, getLevel, testSize, TEST_SIZE, levelLabel, EXAM_GRADES } from '../js/levels.js';
+import { LEVELS, getLevel, testSize, TEST_SIZE, levelLabel, EXAM_GRADES, EXAM_TIME_MODES, DEFAULT_EXAM_TIME_MODE, examMinutes } from '../js/levels.js';
 import { mulProgram, divProgram, programFor, fmtScaled, parseScaled } from '../js/muldiv.js';
 import { LESSONS } from '../js/lessons.js';
 import { Progress, memoryStorage, PROGRESS_KEY } from '../js/progress.js';
@@ -1121,6 +1121,23 @@ test('პროგრესი: ეტაპი 3 + არასავალდ�
   assert(pr.bestExam('g7').score === 170 && pr.data.exams.length === 2, 'გამოცდების ისტორია');
   const pr2 = new Progress(memoryStorage());
   assert(pr2.importJSON(pr.exportJSON()).ok && pr2.data.kinds.mul.answered === 2 && pr2.data.exams.length === 2, 'ექსპორტი/იმპორტი');
+});
+
+test('გამოცდის დრო: ოფიციალური / გაზრდილი (×1,5), ნაგულისხმევი — გაზრდილი; ისტორიაში რეჟიმი ჩანს', () => {
+  assert(DEFAULT_EXAM_TIME_MODE === 'extended', 'ნაგულისხმევი რეჟიმი გაზრდილი უნდა იყოს');
+  assert(new Progress(memoryStorage()).settings.examTimeMode === 'extended', 'პარამეტრების ნაგულისხმევი');
+  for (const g of EXAM_GRADES) {
+    assert(examMinutes(g, 'official') === OFFICIAL[g.id].minutes, `${g.id}: ოფიციალური დრო`);
+    assert(examMinutes(g, 'extended') === OFFICIAL[g.id].minutes * 1.5, `${g.id}: გაზრდილი დრო`);
+    assert(examMinutes(g) === examMinutes(g, 'extended'), `${g.id}: ნაგულისხმევი = გაზრდილი`);
+  }
+  assert(EXAM_TIME_MODES.official.factor === 1 && EXAM_TIME_MODES.extended.factor === 1.5, 'კოეფიციენტები');
+  const pr = new Progress(memoryStorage());
+  pr.addExam({ grade: 'g8', score: 130, total: 200, passed: true, secs: 1500, timeMode: 'extended', minutes: 30 });
+  pr.addExam({ grade: 'g8', score: 140, total: 200, passed: true, secs: 1100, timeMode: 'official', minutes: 20 });
+  const pr2 = new Progress(memoryStorage());
+  assert(pr2.importJSON(pr.exportJSON()).ok, 'იმპორტი');
+  assert(pr2.data.exams.map((e) => e.timeMode).join() === 'extended,official', 'რეჟიმი ისტორიაში ინახება');
 });
 
 // ---------------- შედეგი ----------------
