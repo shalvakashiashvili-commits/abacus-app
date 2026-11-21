@@ -1,7 +1,7 @@
 // გაკვეთილის ეკრანი: ბარათები (თითოზე ერთი იდეა), ანიმირებული ნაბიჯ-ნაბიჯ დემონსტრაციები,
 // სორობანის გაცნობის ტური და „სცადე თავად“ ბარათები.
 
-import { h, paragraphs, exprText, digitCount } from './ui.js';
+import { h, paragraphs, exprText, digitCount, put } from './ui.js';
 import { SorobanView } from './soroban-view.js';
 import { getLesson } from './lessons.js';
 import { demoSteps, rodNamer } from './techniques.js';
@@ -26,7 +26,7 @@ export function renderLesson(root, { levelId, progress, onExit }) {
   const prevBtn = h('button', { class: 'btn ghost', on: { click: () => idx > 0 && show(idx - 1) } }, '← წინა');
   const nextBtn = h('button', { class: 'btn primary', on: { click: next } });
   const nav = h('div', { class: 'lesson-nav' }, prevBtn, nextBtn);
-  root.append(head, bar, cardEl, nav);
+  put(root, head, bar, cardEl, nav);
 
   function show(i) {
     widget?.destroy();
@@ -35,9 +35,9 @@ export function renderLesson(root, { levelId, progress, onExit }) {
     progress.markLessonStep(levelId, i);
     const c = cards[i];
     cardEl.innerHTML = '';
-    cardEl.append(h('h2', null, c.title), ...paragraphs(c.text));
+    put(cardEl, h('h2', null, c.title), ...paragraphs(c.text));
     const area = h('div', { class: 'widget' });
-    cardEl.append(area);
+    put(cardEl, area);
     widget = makeWidget(c, area);
     counter.textContent = `${i + 1} / ${cards.length}`;
     barFill.style.width = `${((i + 1) / cards.length) * 100}%`;
@@ -56,7 +56,7 @@ export function renderLesson(root, { levelId, progress, onExit }) {
   }
 
   if (cards.length) show(idx);
-  else cardEl.append(h('p', null, 'ამ დონის ახსნა ჯერ არ არის.'));
+  else put(cardEl, h('p', null, 'ამ დონის ახსნა ჯერ არ არის.'));
 
   return {
     destroy() {
@@ -101,7 +101,7 @@ function tourWidget(area, parts) {
   const prev = h('button', { class: 'btn ghost', on: { click: () => i > 0 && show(i - 1) } }, '← წინა ნაწილი');
   const counter = h('span', { class: 'step-count' });
   const nextBtn = h('button', { class: 'btn primary', on: { click: () => i < parts.length - 1 && show(i + 1) } }, 'შემდეგი ნაწილი →');
-  area.append(h('div', { class: 'caption tour-caption' }, title, text), h('div', { class: 'demo-controls' }, prev, counter, nextBtn));
+  put(area, h('div', { class: 'caption tour-caption' }, title, text), h('div', { class: 'demo-controls' }, prev, counter, nextBtn));
   function show(k) {
     i = k;
     const part = parts[k];
@@ -128,7 +128,7 @@ function valuesDemo(area, demo) {
   const caption = h('div', { class: 'caption' });
   let i = 0;
   const ctl = stepControls(() => show(0), () => i < steps.length - 1 && show(i + 1));
-  area.append(caption, ctl.el);
+  put(area, caption, ctl.el);
   function show(k) {
     i = k;
     sv.setValue(steps[k].v);
@@ -167,7 +167,7 @@ function calcDemo(area, demo) {
   let i = 0;
   const ctl = stepControls(() => start(), () => i < seq.length - 1 && apply(i + 1));
   area.prepend(exprEl);
-  area.append(caption, ctl.el);
+  put(area, caption, ctl.el);
 
   function apply(k) {
     i = k;
@@ -218,7 +218,7 @@ function programDemo(area, demo) {
   let i = 0;
   const ctl = stepControls(() => start(), () => i < seq.length - 1 && apply(i + 1));
   area.prepend(exprEl);
-  area.append(h('div', { class: 'caption' }, headEl, textEl), ctl.el);
+  put(area, h('div', { class: 'caption' }, headEl, textEl), ctl.el);
   function apply(k) {
     i = k;
     const s = seq[k];
@@ -249,6 +249,6 @@ function tryWidget(area, { target, unit = 0 }) {
       status.textContent = ok ? '✓ სწორია! შეგიძლია გადახვიდე შემდეგზე.' : `ჩაწერე: ${show}`;
     }
   });
-  area.append(status);
+  put(area, status);
   return { destroy: () => sv.destroy() };
 }

@@ -1,12 +1,13 @@
 // აპლიკაციის ჩარჩო: მარშრუტიზაცია (#/...), ეკრანები, თემა, service worker-ის რეგისტრაცია.
 
-import { h, toast, confirmDialog, fmtSec, fmtPct } from './ui.js';
+import { h, toast, confirmDialog, fmtSec, fmtPct, put } from './ui.js';
 import { Progress } from './progress.js';
-import { LEVELS, getLevel, testSize, PASS_ACCURACY, levelLabel, prevBuilt } from './levels.js';
+import { LEVELS, getLevel, testSize, PASS_ACCURACY, levelLabel, prevBuilt, getExamGrade, EXAM_GRADES } from './levels.js';
 import { getLesson } from './lessons.js';
 import { buildSet, shuffle, problemKey } from './generator.js';
 import { renderLesson } from './lesson-player.js';
-import { runSession, problemLabel } from './exercise.js';
+import { runSession, problemLabel, KIND_TITLES } from './exercise.js';
+import { renderExamList, runExam } from './exam.js';
 import { SorobanView } from './soroban-view.js';
 
 const progress = new Progress();
@@ -51,6 +52,7 @@ function route() {
     case 'lesson': return setScreen((r) => lessonScreen(r, id), { showNav: false });
     case 'practice': return setScreen((r) => practiceScreen(r, id, parts[2]), { showNav: false });
     case 'review': return setScreen((r) => reviewScreen(r), { showNav: false });
+    case 'exam': return setScreen((r) => examScreen(r, id), { showNav: !id, navKey: 'home' });
     case 'free': return setScreen((r) => freeScreen(r), { navKey: 'free' });
     case 'progress': return setScreen((r) => progressScreen(r), { navKey: 'progress' });
     case 'settings': return setScreen((r) => settingsScreen(r), { navKey: 'settings' });
@@ -126,7 +128,7 @@ function dailyCard() {
 // ---------- მთავარი ეკრანი ----------
 function homeScreen(root) {
   const t = progress.totals();
-  root.append(
+  put(root, 
     h('header', { class: 'home-head' },
       h('div', { class: 'brand' },
         h('img', { src: './icons/icon-192.png', alt: '', class: 'brand-icon', width: '44', height: '44' }),
@@ -152,14 +154,18 @@ function levelMap() {
     if (!l.built) { state = 'soon'; label = 'შემდეგ ეტაპზე'; mark = L; }
     else if (progress.isPassed(l.id)) { state = 'passed'; label = 'გავლილია'; mark = '✓'; }
     else if (String(l.id) === String(cur)) { state = 'current'; label = 'მიმდინარე'; mark = L; }
-    else { state = 'locked'; label = 'დაბლოკილია'; mark = '🔒'; }
+    else if (l.optional && progress.isUnlocked(l.id)) { state = 'current'; label = 'არასავალდებულო · გახსნილია'; mark = L; }
+    else { state = 'locked'; label = l.optional ? `არასავალდებულო · გაიხსნება დონე ${levelLabel(getLevel(l.requires))}-ის შემდეგ` : 'დაბლოკილია'; mark = '🔒'; }
+    if (l.optional && state === 'passed') label = 'არასავალდებულო · გავლილია';
     const open = state === 'passed' || state === 'current';
     const onClick = (e) => {
       if (open) return;
       e.preventDefault();
-      toast(state === 'soon' ? 'ეს დონე აპლიკაციის შემდეგ ეტაპზე დაემატება.' : `ჯერ დაასრულე დონე ${levelLabel(prevBuilt(l.id))}.`);
+      if (state === 'soon') toast('ეს დონე აპლიკაციის შემდეგ ეტაპზე დაემატება.');
+      else if (l.optional) toast(`ეს არასავალდებულო დონე გაიხსნება დონე ${levelLabel(getLevel(l.requires))}-ის ჩაბარების შემდეგ.`);
+      else toast(`ჯერ დაასრულე დონე ${levelLabel(prevBuilt(l.id))}.`);
     };
-    return h('li', { class: `map-node ${state}` },
+    return h('li', { class: `map-node ${state}${l.optional ? ' optional' : ''}` },
       h('a', { href: open ? `#/level/${l.id}` : '#/', on: { click: onClick } },
         h('span', { class: 'node-circle' }, mark),
         h('span', { class: 'node-text' },
@@ -192,7 +198,7 @@ function levelScreen(root, id) {
     }
   ];
   const acc = st.answered ? st.correct / st.answered : null;
-  root.append(
+  put(root, 
     topbar(`დონე ${levelLabel(lvl)}`),
     h('section', { class: 'card' },
       h('h1', { class: 'level-title' }, lvl.title),
@@ -207,6 +213,12 @@ function levelScreen(root, id) {
           h('span', { class: 'plan-mark' }, s.done ? '✓' : String(s.n)),
           h('span', { class: 'step-text' }, h('span', { class: 'plan-title' }, s.title), h('span', { class: 'muted small' }, s.desc)),
           h('span', { class: 'chev' }, s.enabled ? '›' : '🔒'))))),
+    lvl.exam ? h('section', { class: 'card' },
+      h('h2', null, 'საგამოცდო რეჟიმი'),
+      h('p', { class: 'small' }, `„კენტეის მსგავსი“ გამოცდა: ${EXAM_GRADES.map((g) => g.grade).join(', ')}. სექციები, დრო და ქულები — ოფიციალური ცხრილის მიხედვით.`),
+      st.lessonDone
+        ? h('a', { class: 'btn primary wide', href: '#/exam' }, 'გამოცდების სია →')
+        : h('p', { class: 'muted small' }, 'გაიხსნება ახსნის დასრულების შემდეგ.')) : null,
     h('section', { class: 'card' }, h('h2', null, 'ამ დონის სტატისტიკა'),
       h('div', { class: 'tiles' },
         tile('ამოხსნილი', String(st.answered)),
@@ -275,7 +287,7 @@ function buildReview() {
 function reviewScreen(root) {
   const problems = buildReview();
   if (!problems.length) {
-    root.append(topbar('გამეორება'), h('section', { class: 'card' },
+    put(root, topbar('გამეორება'), h('section', { class: 'card' },
       h('p', null, 'ჯერ გასამეორებელი არაფერია. შეცდომები და გავლილი დონეების მაგალითები აქ გამოჩნდება.'),
       h('a', { class: 'btn primary wide', href: '#/' }, 'მთავარ ეკრანზე')));
     return null;
@@ -286,13 +298,34 @@ function reviewScreen(root) {
   });
 }
 
+// ---------- საგამოცდო რეჟიმი ----------
+function examScreen(root, gradeId) {
+  const lv = getLevel('10b');
+  if (!progress.isUnlocked('10b') || !progress.level('10b').lessonDone) {
+    toast('საგამოცდო რეჟიმი გაიხსნება დონე 10ბ-ის ახსნის შემდეგ.');
+    location.hash = progress.isUnlocked('10b') ? '#/level/10b' : '#/';
+    return null;
+  }
+  if (!gradeId) {
+    put(root, topbar('საგამოცდო რეჟიმი', '#/level/10b'));
+    renderExamList(root, { progress });
+    return null;
+  }
+  const grade = getExamGrade(gradeId);
+  if (!grade || !lv) { location.hash = '#/exam'; return null; }
+  return runExam(root, {
+    grade, progress,
+    onExit: (kind) => { if (kind === 'again') route(); else go('#/exam'); }
+  });
+}
+
 // ---------- თავისუფალი სორობანი ----------
 function freeScreen(root) {
-  root.append(topbar('თავისუფალი სორობანი'));
+  put(root, topbar('თავისუფალი სორობანი'));
   const host = h('section', { class: 'card' });
-  root.append(host);
+  put(root, host);
   const sv = new SorobanView(host, { interactive: true, showValue: !!progress.settings.showValue, tools: ['clear', 'value', 'zoom'] });
-  host.append(h('p', { class: 'muted small' }, 'შეეხე მძივებს: ზედა მძივი = 5, ქვედა = 1. მძივი ითვლება, როცა გამყოფ ზოლს ეხება. ერთეულები — ყველაზე მარჯვენა ღეროზე.'));
+  put(host, h('p', { class: 'muted small' }, 'შეეხე მძივებს: ზედა მძივი = 5, ქვედა = 1. მძივი ითვლება, როცა გამყოფ ზოლს ეხება. ერთეულები — ყველაზე მარჯვენა ღეროზე.'));
   const t0 = Date.now();
   return { destroy: () => { sv.destroy(); progress.addTime(Math.min(Date.now() - t0, 5 * 60 * 1000)); } };
 }
@@ -303,7 +336,7 @@ function progressScreen(root) {
   const days = progress.lastDays(14);
   const maxMs = Math.max(1, ...days.map((d) => d.ms));
   const mistakes = progress.data.mistakes.slice().reverse();
-  root.append(
+  put(root, 
     topbar('პროგრესი'),
     h('section', { class: 'card' }, h('h2', null, 'საერთო'),
       h('div', { class: 'tiles' },
@@ -319,6 +352,8 @@ function progressScreen(root) {
           h('div', { class: 'chart-bar', style: { height: `${Math.max(d.ms ? 6 : 2, (d.ms / maxMs) * 100)}%` } }),
           h('div', { class: 'chart-day small muted' }, d.key.slice(8)));
       }))),
+    kindStatsCard(),
+    examHistoryCard(),
     h('section', { class: 'card' }, h('h2', null, 'დონეები'),
       h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
         h('thead', null, h('tr', null, h('th', null, 'დონე'), h('th', null, 'სიზუსტე'), h('th', null, 'დრო'), h('th', null, 'ტესტი'))),
@@ -342,6 +377,30 @@ function progressScreen(root) {
   return null;
 }
 
+function kindStatsCard() {
+  const kinds = progress.data.kinds || {};
+  const keys = Object.keys(kinds).filter((k) => kinds[k].answered > 0);
+  if (!keys.length) return null;
+  return h('section', { class: 'card' }, h('h2', null, 'ტიპების მიხედვით'),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+      h('thead', null, h('tr', null, h('th', null, 'ტიპი'), h('th', null, 'რაოდ.'), h('th', null, 'სიზუსტე'), h('th', null, 'საშ. დრო'))),
+      h('tbody', null, keys.map((k) => {
+        const s = kinds[k];
+        return h('tr', null, h('td', null, KIND_TITLES[k] || k), h('td', null, String(s.answered)),
+          h('td', null, fmtPct(s.correct / s.answered)), h('td', null, fmtSec(s.ms / s.answered / 1000)));
+      })))));
+}
+
+function examHistoryCard() {
+  const list = (progress.data.exams || []).slice().reverse();
+  if (!list.length) return null;
+  return h('section', { class: 'card' }, h('h2', null, 'გამოცდები („კენტეის მსგავსი“)'),
+    h('ul', { class: 'mistake-list' }, list.slice(0, 20).map((e) => {
+      const g = getExamGrade(e.grade);
+      return h('li', null, `${e.day} · ${g ? g.grade : e.grade}ს მსგავსი: ${e.score} / ${e.total} ${e.passed ? '✓' : '✗'} · ${Math.floor(e.secs / 60)} წთ`);
+    })));
+}
+
 // ---------- პარამეტრები ----------
 function settingsScreen(root) {
   const s = progress.settings;
@@ -359,7 +418,7 @@ function settingsScreen(root) {
       .catch(() => { cacheInfo.textContent = 'მიუწვდომელია'; });
   }
 
-  root.append(
+  put(root, 
     topbar('პარამეტრები'),
     h('section', { class: 'card' }, h('h2', null, 'თემა'),
       h('div', { class: 'radios' },

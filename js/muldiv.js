@@ -123,7 +123,10 @@ export function mulProgram({ a, b, place = 3, aDec = 0, bDec = 0 }) {
 // ---------- გაყოფა ----------
 // a — გასაყოფი (aDec ნიშანი მძიმის შემდეგ), b — მთელი გამყოფი; place — გასაყოფის ერთეულების ღერო (定位点).
 // decimals — რამდენი ციფრი გავაგრძელოთ მძიმის შემდეგ (0 = მთელი განაყოფი + ნაშთი).
-export function divProgram({ a, b, place = 0, aDec = 0, decimals = 0 }) {
+// estimate: 'exact' — ყოველთვის სწორი ციფრი (დონეები 7ა–8ბ);
+//           'trial' — 修正 (還元/割り戻し): საცდელი ციფრი მხოლოდ გამყოფის პირველი ციფრით (შეიძლება დიდი იყოს);
+//           როცა ნამრავლის გამოკლება ვერ ხერხდება, ციფრს ერთით ვამცირებთ და ზედმეტად გამოკლებულს ვაბრუნებთ.
+export function divProgram({ a, b, place = 0, aDec = 0, decimals = 0, estimate = 'exact' }) {
   if (!(a > 0 && b > 0) || !Number.isInteger(b)) throw new Error('გასაყოფი და გამყოფი დადებითი უნდა იყოს');
   const n = nDigits(b);
   const aLow = place - aDec;
@@ -157,25 +160,62 @@ export function divProgram({ a, b, place = 0, aDec = 0, decimals = 0 }) {
     const cmp = divides
       ? `${chunkN} ≥ ${b} — იყოფა, ამიტომ ციფრს 2 ღეროთი მარცხნივ ვწერთ (შუაში ერთი ცარიელი ღეროა)`
       : `${chunkN} < ${b} — არ იყოფა, ამიტომ ვიღებთ ერთ ციფრს მეტს (${chunkAt(n + 1)}) და ციფრს მეზობელ ღეროზე ვწერთ`;
-    push(prog, q * 10 ** qRod, {
+    const chunkUsed = divides ? chunkN : chunkAt(n + 1);
+    const b1 = digitAt(b, n - 1);
+    const chunkTop = Math.floor(chunkUsed / 10 ** (n - 1));
+    const trial = estimate === 'trial' && n >= 2 ? Math.min(9, Math.floor(chunkTop / b1)) : q;
+    if (trial < q) throw new Error('საცდელი ციფრი სწორზე ნაკლები ვერ იქნება');
+    push(prog, trial * 10 ** qRod, {
       type: 'quotient',
-      instr: `ჩაწერე განაყოფის ციფრი ${q}`,
-      hint: `${cmp}. ${q} — ყველაზე დიდი ციფრი, რომლის ნამრავლი ${b}-ზე არ აღემატება ${divides ? chunkN : chunkAt(n + 1)}-ს. ${rodLabel(qRod)}.`,
-      rods: [qRod], divides, q, qRod
+      instr: trial === q && estimate !== 'trial' ? `ჩაწერე განაყოფის ციფრი ${q}` : `ჩაწერე საცდელი ციფრი ${trial}`,
+      hint: estimate === 'trial' && n >= 2
+        ? `${cmp}. შეფასება მხოლოდ გამყოფის პირველი ციფრით: ${chunkTop} : ${b1} → ${trial}${Math.floor(chunkTop / b1) > 9 ? ' (მაქსიმუმ 9)' : ''}. ${rodLabel(qRod)}.`
+        : `${cmp}. ${q} — ყველაზე დიდი ციფრი, რომლის ნამრავლი ${b}-ზე არ აღემატება ${chunkUsed}-ს. ${rodLabel(qRod)}.`,
+      rods: [qRod], divides, q: trial, qRod
     });
-    qDigits.push({ q, qRod, divides });
+    let cur = trial;
+    let corrections = 0;
+    const done = [];
     for (let j = n - 1; j >= 0; j--) {
       const bj = digitAt(b, j);
-      const prod = q * bj;
       const unitsRod = qRod - n - 1 + j;
-      if (prod === 0) continue;
-      push(prog, -prod * 10 ** unitsRod, {
-        type: 'subtract',
-        instr: `გამოაკელი ${q} × ${bj} = ${pad2(prod)}`,
-        hint: `${q} × ${bj} = ${pad2(prod)}: ათეულები — ${rodLabel(unitsRod + 1)}, ერთეულები — ${rodLabel(unitsRod)}. (ნამრავლს განაყოფის ციფრის მარჯვენა ღეროდან ვაკლებთ.)`,
-        rods: [unitsRod + 1, unitsRod]
-      });
+      for (;;) {
+        const prod = cur * bj;
+        const remNow = prog.board - qPart - cur * 10 ** qRod;
+        if (prod * 10 ** unitsRod <= remNow) {
+          if (prod) {
+            push(prog, -prod * 10 ** unitsRod, {
+              type: 'subtract',
+              instr: `გამოაკელი ${cur} × ${bj} = ${pad2(prod)}`,
+              hint: `${cur} × ${bj} = ${pad2(prod)}: ათეულები — ${rodLabel(unitsRod + 1)}, ერთეულები — ${rodLabel(unitsRod)}. (ნამრავლს განაყოფის ციფრის მარჯვენა ღეროდან ვაკლებთ.)`,
+              rods: [unitsRod + 1, unitsRod]
+            });
+          }
+          done.push({ bj, unitsRod });
+          break;
+        }
+        // 還元: ციფრი დიდია — ვამცირებთ და ვაბრუნებთ ზედმეტად გამოკლებულს
+        corrections += 1;
+        push(prog, -1 * 10 ** qRod, {
+          type: 'correct',
+          instr: `${cur} × ${bj} აღარ აკლდება → შეამცირე ციფრი: ${cur} → ${cur - 1}`,
+          hint: `${pad2(prod)}-ის გამოკლება ვერ ხერხდება — საცდელი ციფრი დიდია. განაყოფის ღეროზე (${rodLabel(qRod)}) 1-ს ვაკლებთ.`,
+          rods: [qRod], q: cur - 1, qRod
+        });
+        for (const d of done) {
+          if (!d.bj) continue;
+          push(prog, d.bj * 10 ** d.unitsRod, {
+            type: 'giveback',
+            instr: `დააბრუნე ზედმეტად გამოკლებული 1 × ${d.bj} = ${pad2(d.bj)}`,
+            hint: `ციფრი 1-ით შევამცირეთ, ამიტომ ადრე 1 × ${d.bj} ზედმეტად გამოვაკელით. ვაბრუნებთ: ${rodLabel(d.unitsRod + 1)} / ${rodLabel(d.unitsRod)}.`,
+            rods: [d.unitsRod + 1, d.unitsRod]
+          });
+        }
+        cur -= 1;
+      }
     }
+    if (cur !== q) throw new Error(`修正-ის შემდეგ ციფრი ${cur} ≠ ${q}`);
+    qDigits.push({ q, qRod, divides, trial, corrections });
     qPart += q * 10 ** qRod;
   }
   const remBoard = prog.board - qPart;
@@ -198,7 +238,7 @@ export function describeResult(p) {
 // ამოცანიდან (generator.js-ის ფორმატი) პროგრამის აგება
 export function programFor(p) {
   if (p.kind === 'mul') return mulProgram({ a: p.a, b: p.b, place: p.place, aDec: p.aDec || 0, bDec: p.bDec || 0 });
-  if (p.kind === 'div') return divProgram({ a: p.a, b: p.b, place: p.place, aDec: p.aDec || 0, decimals: p.qDec || 0 });
+  if (p.kind === 'div') return divProgram({ a: p.a, b: p.b, place: p.place, aDec: p.aDec || 0, decimals: p.qDec || 0, estimate: p.fix ? 'trial' : 'exact' });
   throw new Error('პროგრამა მხოლოდ გამრავლება/გაყოფისთვისაა');
 }
 

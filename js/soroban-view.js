@@ -22,6 +22,7 @@ export class SorobanView {
       dec: 0,              // ათწილადი: ერთეულების ღერო (მნიშვნელობა ნაჩვენებია მძიმით)
       anchor: null,        // ▼ — ღერო, სადაც რიცხვის ერთეულები უნდა ჩაიწეროს (定位点)
       unit: null,          // ▲ — პასუხის ერთეულების ღერო
+      ghost: false,        // „მოჩვენებითი“ სორობანი: მძივები არ ჩანს (ვიზუალიზაციის ვარჯიში)
       onChange: null,
       ...opts
     };
@@ -143,6 +144,7 @@ export class SorobanView {
     this.unitRow.hidden = this.opts.unit === null || this.opts.unit === undefined;
     this.root.classList.toggle('show-value', this.showValue);
     this.root.classList.toggle('ro', !this.interactive);
+    this.root.classList.toggle('ghost', !!this.opts.ghost);
     if (this.btnValue) this.btnValue.textContent = this.showValue ? 'მნიშვნელობის დამალვა' : 'მნიშვნელობის ჩვენება';
     this.hiddenNote.hidden = !(m.highestUsedPlace() >= this.visible);
   }
@@ -225,6 +227,16 @@ export class SorobanView {
     const need = Math.max(anchor ?? 0, unit ?? 0) + 1;
     if (need > (this.opts.minRods || 1)) this.opts.minRods = need;
     this.layout(true);
+  }
+
+  setGhost(b) {
+    this.opts.ghost = !!b;
+    this.update();
+  }
+
+  // სურათის დამალვა/ჩვენება (ვიზუალიზაცია: რიცხვი მოკლედ ჩანს)
+  setCovered(b) {
+    this.root.classList.toggle('covered', !!b);
   }
 
   setDecimals(dec) {

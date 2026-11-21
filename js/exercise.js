@@ -2,11 +2,11 @@
 // სავარჯიშოს ტიპები: read (წაიკითხე), set (ჩაწერე), calc (გამოთვალე), column (სვეტური ჯამი),
 // table (გამრავლების ტაბულა), mul (გამრავლება), div (გაყოფა). read/set/calc/column ათწილადებითაც (p.unit).
 
-import { h, numpad, digitCount, fmtSec, fmtPct, sleep, confirmDialog } from './ui.js';
+import { h, numpad, digitCount, fmtSec, fmtPct, sleep, confirmDialog, put } from './ui.js';
 import { SorobanView } from './soroban-view.js';
 import { hintFor, analyze, rodNamer } from './techniques.js';
 import { formatNumber, toDigits, PLACE_GEN } from './soroban.js';
-import { getLevel, levelLabel, nextLevel, PASS_ACCURACY } from './levels.js';
+import { getLevel, levelLabel, nextLevel, optionalUnlockedBy, PASS_ACCURACY } from './levels.js';
 import { fmtScaled, parseScaled, programFor, rodLabel } from './muldiv.js';
 
 export const MODE_TITLES = {
@@ -42,7 +42,12 @@ export const KIND_TITLES = {
   column: 'სვეტური ჯამი',
   table: 'გამრავლების ტაბულა',
   mul: 'გამრავლება სორობანზე (片落とし)',
-  div: 'გაყოფა სორობანზე (片落とし)'
+  div: 'გაყოფა სორობანზე (片落とし)',
+  flashread: 'ვიზუალიზაცია: დაიმახსოვრე სორობანი',
+  mental: 'ანძანი: გამოთვალე გონებაში',
+  mentalmul: 'ანძანი: გამრავლება გონებაში',
+  mentaldiv: 'ანძანი: გაყოფა გონებაში',
+  flash: 'სწრაფი ანძანი (flash anzan)'
 };
 
 // რიცხვის ჩვენება (ათწილადი — მძიმით)
@@ -69,7 +74,7 @@ function divText(p) {
 export function answerText(p) {
   if (p.kind === 'mul') return fmtScaled(p.answer, p.ansDec || 0);
   if (p.kind === 'div') return fmtScaled(p.q, p.qDec || 0) + (p.r ? `, ნაშთი ${formatNumber(p.r)}` : '');
-  if (p.kind === 'table') return formatNumber(p.answer);
+  if (p.kind === 'table' || p.kind === 'mentalmul' || p.kind === 'mentaldiv' || p.kind === 'flashread') return formatNumber(p.answer);
   return fv(p, p.answer);
 }
 
@@ -78,14 +83,22 @@ export function problemLabel(p) {
   if (p.kind === 'set') return `ჩაწერა: ${fv(p, p.value)}`;
   if (p.kind === 'table') return `${p.a} × ${p.b} = ${p.answer}`;
   if (p.kind === 'mul') return `${mulText(p)} = ${answerText(p)}`;
-  if (p.kind === 'div') return `${divText(p)} = ${answerText(p)}`;
-  return `${p.kind === 'column' ? 'სვეტი: ' : ''}${exprOf(p)} = ${fv(p, p.answer)}`;
+  if (p.kind === 'div') return `${divText(p)} = ${answerText(p)}${p.fix ? ' (修正)' : ''}`;
+  if (p.kind === 'flashread') return `ვიზუალიზაცია: ${formatNumber(p.value)}`;
+  if (p.kind === 'mentalmul') return `ანძანი: ${p.a} × ${p.b} = ${p.answer}`;
+  if (p.kind === 'mentaldiv') return `ანძანი: ${p.a} : ${p.b} = ${p.answer}`;
+  const pre = { column: 'სვეტი: ', mental: 'ანძანი: ', flash: 'flash: ' }[p.kind] || (p.ghost ? 'მოჩვენებითი: ' : '');
+  return `${pre}${exprOf(p)} = ${fv(p, p.answer)}`;
 }
 
 function maxPartial(terms) {
   let run = 0, mx = 0;
   for (const t of terms) { run += t; mx = Math.max(mx, run); }
   return mx;
+}
+
+function ghostLegend(p) {
+  return p.ghost ? h('div', { class: 'legend' }, '👻 მოჩვენებითი სორობანი: მძივები არ ჩანს — მათი მდგომარეობა გონებაში წარმოიდგინე. შემოწმებისას გამოჩნდება.') : null;
 }
 
 function unitLegend(p) {
@@ -112,7 +125,7 @@ export function runSession(root, { mode, levelId, problems, progress, onExit }) 
     timerEl, counter);
   const barFill = h('div', { class: 'bar-fill' });
   const body = h('div', { class: 'ex-body' });
-  root.append(head, h('div', { class: 'bar' }, barFill), body);
+  put(root, head, h('div', { class: 'bar' }, barFill), body);
 
   async function close() {
     if (index > 0 && !finished) {
@@ -147,7 +160,7 @@ export function runSession(root, { mode, levelId, problems, progress, onExit }) 
         ? `დროის პირობა: საშუალოდ ≤ ${level.test.maxAvgSec} წამი თითო მაგალითზე.`
         : 'დროის ლიმიტი არ არის.');
     }
-    body.append(h('div', { class: 'card' },
+    put(body, h('div', { class: 'card' },
       h('h2', null, MODE_TITLES[mode]),
       lines.map((l) => h('p', null, l)),
       h('button', { class: 'btn primary wide', on: { click: showProblem } }, 'დაწყება →')));
@@ -161,7 +174,7 @@ export function runSession(root, { mode, levelId, problems, progress, onExit }) 
     barFill.style.width = `${(index / problems.length) * 100}%`;
     timerEl.textContent = '';
     const ctx = {
-      mode, guided: mode === 'guided', progress, body, startTimer,
+      mode, guided: mode === 'guided', progress, body, startTimer, elapsed,
       isDestroyed: () => destroyed,
       done: (r) => finishProblem(p, r)
     };
@@ -187,11 +200,12 @@ export function runSession(root, { mode, levelId, problems, progress, onExit }) 
     else msg = `✗ არასწორია. ${given !== undefined && given !== null && given !== '' ? `შენი პასუხი: ${given} · ` : ''}სწორი პასუხი: ${answerText(p)}`;
     const fb = h('div', { class: `feedback ${correct ? 'good' : fixed ? 'warn' : 'bad'}` }, h('div', { class: 'fb-msg' }, msg));
     if (!correct && mode !== 'test') {
-      if (p.kind === 'calc' || p.kind === 'column') fb.append(explainTerms(p));
-      if (p.kind === 'mul' || p.kind === 'div') fb.append(explainProgram(p));
+      if (p.kind === 'calc' || p.kind === 'column') put(fb, explainTerms(p));
+      if (p.kind === 'mul' || p.kind === 'div') put(fb, explainProgram(p));
+      if (p.kind === 'mentalmul') put(fb, h('p', { class: 'small' }, mentalMulHint(p.a, p.b)));
     }
-    fb.append(nextBtn);
-    body.append(fb);
+    put(fb, nextBtn);
+    put(body, fb);
     nextBtn.focus({ preventScroll: true });
     fb.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
@@ -221,7 +235,7 @@ export function runSession(root, { mode, levelId, problems, progress, onExit }) 
         const wasPassed = progress.isPassed(level.id);
         progress.recordSession({ level: level.id, mode, accuracy: acc, avgSec, passed });
         const nxt = nextLevel(level.id);
-        card.append(
+        put(card, 
           h('div', { class: `result-badge ${passed ? 'good' : 'bad'}` }, passed ? '🎉' : '↻'),
           h('h2', null, passed ? `დონე ${levelLabel(level)} გავლილია!` : 'ჯერ არ გამოვიდა'),
           h('ul', { class: 'criteria' },
@@ -239,30 +253,37 @@ export function runSession(root, { mode, levelId, problems, progress, onExit }) 
       }
     }
     if (mode !== 'test') {
-      card.append(
+      put(card, 
         h('div', { class: `result-badge ${acc >= 0.9 ? 'good' : acc >= 0.7 ? 'warn' : 'bad'}` }, fmtPct(acc)),
         h('h2', null, acc >= 0.9 ? 'შესანიშნავია!' : acc >= 0.7 ? 'კარგია, გააგრძელე!' : 'ვარჯიში გააგრძელე'),
         h('p', null, `სწორი: ${correct} / ${n} · საშუალო დრო: ${fmtSec(avgSec)}`)
       );
       if (mode === 'tasks' && level && acc >= 0.8 && !progress.isPassed(level.id)) {
-        card.append(h('p', null, 'მზად ხარ დონის ტესტისთვის!'));
+        put(card, h('p', null, 'მზად ხარ დონის ტესტისთვის!'));
       }
     }
     const tempo = tempoOffer(results, acc, progress);
-    if (tempo) card.append(tempo);
+    if (tempo) put(card, tempo);
+    const flashBox = flashAutoSpeed(results, progress);
+    if (flashBox) put(card, flashBox);
+    if (mode === 'test' && passed && level) {
+      for (const o of optionalUnlockedBy(level.id)) {
+        put(card, h('p', null, `გაიხსნა არასავალდებულო დონე „${levelLabel(o)}“: ${o.title}.`));
+      }
+    }
     const wrong = results.filter((r) => !r.correct);
     if (wrong.length) {
-      card.append(h('h3', null, 'შეცდომები (გამეორებაში დაბრუნდება):'),
+      put(card, h('h3', null, 'შეცდომები (გამეორებაში დაბრუნდება):'),
         h('ul', { class: 'mistake-list' }, wrong.map((r) => h('li', null, problemLabel(r.problem)))));
     }
-    card.append(h('div', { class: 'row wrap' },
+    put(card, h('div', { class: 'row wrap' },
       h('button', { class: 'btn ghost', on: { click: () => onExit('again') } }, 'თავიდან'),
       h('button', { class: 'btn primary', on: { click: () => onExit(level ? 'level' : 'home') } }, level ? 'დონეზე დაბრუნება' : 'მთავარ ეკრანზე')));
-    body.append(card);
+    put(body, card);
   }
 
   if (!problems.length) {
-    body.append(h('div', { class: 'card' }, h('p', null, 'მაგალითები ვერ შეიქმნა.')));
+    put(body, h('div', { class: 'card' }, h('p', null, 'მაგალითები ვერ შეიქმნა.')));
   } else {
     intro();
   }
@@ -286,7 +307,7 @@ function tempoOffer(results, acc, progress) {
   const next = Math.max(0.8, Math.round((speed - 0.4) * 10) / 10);
   const box = h('div', { class: 'tempo' },
     h('p', null, `სვეტურ ჯამში ${fmtPct(colAcc)} სწორია! სცადე უფრო სწრაფი ტემპი: ${speed.toFixed(1)} → ${next.toFixed(1)} წმ თითო რიცხვზე.`));
-  box.append(h('button', {
+  put(box, h('button', {
     class: 'btn primary', on: {
       click: (e) => {
         progress.setSetting('columnSpeed', next);
@@ -296,6 +317,39 @@ function tempoOffer(results, acc, progress) {
     }
   }, 'დავაჩქაროთ'));
   return box;
+}
+
+// flash anzan: 90%+ სიზუსტის შემდეგ სიჩქარე ავტომატურად იზრდება (ინტერვალი 10%-ით მცირდება)
+function flashAutoSpeed(results, progress) {
+  const fl = results.filter((r) => r.problem.kind === 'flash');
+  if (fl.length < 3) return null;
+  const facc = fl.filter((r) => r.correct).length / fl.length;
+  const speed = Number(progress.settings.flashSpeed) || 1.5;
+  if (facc < 0.9 || speed <= 0.3) return null;
+  const next = Math.max(0.3, Math.round(speed * 0.9 * 100) / 100);
+  progress.setSetting('flashSpeed', next);
+  const box = h('div', { class: 'tempo' },
+    h('p', null, `Flash anzan: ${fmtPct(facc)} სწორია — სიჩქარე ავტომატურად გაიზარდა: ${speed.toFixed(2)} → ${next.toFixed(2)} წმ თითო რიცხვზე.`));
+  put(box, h('button', {
+    class: 'btn ghost', on: {
+      click: (e) => {
+        progress.setSetting('flashSpeed', speed);
+        e.target.disabled = true;
+        e.target.textContent = `✓ დაბრუნდა ${speed.toFixed(2)} წმ`;
+      }
+    }
+  }, 'ძველი სიჩქარის დაბრუნება'));
+  return box;
+}
+
+// ცოცხალი საათი (გამრავლება, გაყოფა, ანძანი): დრო ჩანს და სტატისტიკაში იწერება, ლიმიტის გარეშე
+function liveClock(ctx) {
+  const el = h('span', { class: 'clock' }, '⏱ 0.0 წმ');
+  const iv = setInterval(() => {
+    if (ctx.isDestroyed()) { clearInterval(iv); return; }
+    el.textContent = `⏱ ${(ctx.elapsed() / 1000).toFixed(1)} წმ`;
+  }, 200);
+  return { el, stop: () => clearInterval(iv) };
 }
 
 // „როგორ ითვლება?“ — ყოველი რიცხვის ფორმულები
@@ -331,7 +385,7 @@ function renderRead(p, ctx) {
   const dec = p.unit || 0;
   const hint = h('div', { class: 'hint', hidden: true });
   const host = h('div');
-  ctx.body.append(promptBlock('read', h('div', { class: 'prompt-main' }, 'რა რიცხვია სორობანზე?')), unitLegend(p), host, hint);
+  put(ctx.body, promptBlock('read', h('div', { class: 'prompt-main' }, 'რა რიცხვია სორობანზე?')), unitLegend(p), host, hint);
   const sv = new SorobanView(host, {
     interactive: false, showValue: false, tools: [], compact: true, dec,
     unit: dec ? dec : null, minRods: Math.max(2, digitCount(p.value), dec + 1)
@@ -357,7 +411,7 @@ function renderRead(p, ctx) {
       }
     }
   });
-  ctx.body.append(np.el);
+  put(ctx.body, np.el);
   ctx.startTimer();
   return {
     lock: () => np.setDisabled(true),
@@ -374,7 +428,7 @@ function renderSet(p, ctx) {
   const hint = h('div', { class: 'hint', hidden: true });
   const checkBtn = h('button', { class: 'btn primary wide', on: { click: check } }, 'შემოწმება');
   const showBtn = h('button', { class: 'btn ghost wide', hidden: true, on: { click: reveal } }, 'აჩვენე სწორი პასუხი');
-  ctx.body.append(
+  put(ctx.body, 
     promptBlock('set', h('div', { class: 'prompt-main' }, 'ჩაწერე: ', h('span', { class: 'big-num' }, fv(p, p.value)))),
     unitLegend(p), host, hint, h('div', { class: 'actions' }, checkBtn, showBtn));
   const sv = new SorobanView(host, {
@@ -432,7 +486,7 @@ function termsSheet(p, currentIdx = -1, doneUpTo = -1) {
 function calcView(host, p) {
   const dec = p.unit || 0;
   return new SorobanView(host, {
-    interactive: true, showValue: false, tools: ['clear', 'zoom'], dec,
+    interactive: true, showValue: false, tools: ['clear', 'zoom'], dec, ghost: !!p.ghost,
     unit: dec ? dec : null, minRods: Math.max(2, digitCount(maxPartial(p.terms)), dec + 1)
   });
 }
@@ -440,11 +494,11 @@ function calcView(host, p) {
 function renderCalcFree(p, ctx) {
   const host = h('div');
   const checkBtn = h('button', { class: 'btn primary wide', on: { click: () => ctx.done({ correct: sv.value === p.answer, given: fv(p, sv.value) }) } }, 'შემოწმება');
-  ctx.body.append(promptBlock('calc', termsSheet(p)), unitLegend(p), host, h('div', { class: 'actions' }, checkBtn));
+  put(ctx.body, promptBlock('calc', termsSheet(p)), ghostLegend(p), unitLegend(p), host, h('div', { class: 'actions' }, checkBtn));
   const sv = calcView(host, p);
   ctx.startTimer();
   return {
-    lock: () => { checkBtn.disabled = true; sv.setInteractive(false); },
+    lock: () => { checkBtn.disabled = true; sv.setInteractive(false); sv.setGhost(false); },
     destroy: () => sv.destroy()
   };
 }
@@ -466,13 +520,13 @@ function renderCalcGuided(p, ctx) {
   const hintBox = h('div', { class: 'hint', hidden: true }, hintText, h('div', { class: 'row wrap' }, showBtn, resetBtn));
   const hintBtn = h('button', { class: 'btn ghost', on: { click: () => showHint(false) } }, '💡 მინიშნება');
   const checkBtn = h('button', { class: 'btn primary', on: { click: check } }, 'მზადაა ✓');
-  ctx.body.append(h('div', { class: 'prompt' }, h('div', { class: 'prompt-kind' }, KIND_TITLES.calc), sheetHost, instr),
-    unitLegend(p), host, hintBox, h('div', { class: 'actions row' }, hintBtn, checkBtn));
+  put(ctx.body, h('div', { class: 'prompt' }, h('div', { class: 'prompt-kind' }, KIND_TITLES.calc), sheetHost, instr),
+    ghostLegend(p), unitLegend(p), host, hintBox, h('div', { class: 'actions row' }, hintBtn, checkBtn));
   const sv = calcView(host, p);
 
   function render() {
     sheetHost.innerHTML = '';
-    sheetHost.append(termsSheet(p, t, t - 1));
+    put(sheetHost, termsSheet(p, t, t - 1));
     const term = terms[t];
     instr.textContent = t === 0 ? `ჩაწერე ${fv(p, term)}` : `${term > 0 ? 'მიუმატე' : 'გამოაკელი'} ${fv(p, Math.abs(term))}`;
   }
@@ -524,6 +578,7 @@ function renderCalcGuided(p, ctx) {
     sv.setInteractive(false);
     const start = stepStart();
     const a = analyze(start, stepOperand(), undefined, namer);
+    if (p.ghost) sv.setGhost(false);
     sv.setValue(start);
     await sleep(500);
     for (const s of a.steps) {
@@ -539,6 +594,7 @@ function renderCalcGuided(p, ctx) {
     await sleep(1400);
     if (ctx.isDestroyed()) return;
     sv.setValue(start);
+    if (p.ghost) sv.setGhost(true);
     sv.setInteractive(true);
     btns.forEach((b) => { b.disabled = false; });
     busy = false;
@@ -547,7 +603,7 @@ function renderCalcGuided(p, ctx) {
   render();
   ctx.startTimer();
   return {
-    lock: () => { [showBtn, resetBtn, hintBtn, checkBtn].forEach((b) => { b.disabled = true; }); sv.setInteractive(false); },
+    lock: () => { [showBtn, resetBtn, hintBtn, checkBtn].forEach((b) => { b.disabled = true; }); sv.setInteractive(false); sv.setGhost(false); },
     destroy: () => sv.destroy()
   };
 }
@@ -570,7 +626,7 @@ function renderColumn(p, ctx) {
   const host = h('div');
   const startBtn = h('button', { class: 'btn primary wide', on: { click: start } }, '▶ დაწყება');
   const checkBtn = h('button', { class: 'btn primary wide', hidden: true, on: { click: () => ctx.done({ correct: sv.value === p.answer, given: fv(p, sv.value) }) } }, 'შემოწმება');
-  ctx.body.append(
+  put(ctx.body, 
     promptBlock('column', h('div', { class: 'small muted' }, 'რიცხვები სათითაოდ გამოჩნდება — ყოველი მაშინვე სორობანზე შეასრულე. იპოვე თანაბარი რიტმი: წაიკითხე → შეასრულე → შემდეგი.')),
     speedBox, h('div', { class: 'flash-box' }, flash, flashCount), unitLegend(p), host, h('div', { class: 'actions' }, startBtn, checkBtn));
   const sv = calcView(host, p);
@@ -612,7 +668,7 @@ function renderColumn(p, ctx) {
 function renderTable(p, ctx) {
   let attempts = 0;
   const hint = h('div', { class: 'hint', hidden: true });
-  ctx.body.append(promptBlock('table', h('div', { class: 'table-q' }, `${p.a} × ${p.b} = ?`)), hint);
+  put(ctx.body, promptBlock('table', h('div', { class: 'table-q' }, `${p.a} × ${p.b} = ?`)), hint);
   const np = numpad({
     maxLen: 3,
     onSubmit: (v) => {
@@ -631,7 +687,7 @@ function renderTable(p, ctx) {
       }
     }
   });
-  ctx.body.append(np.el);
+  put(ctx.body, np.el);
   ctx.startTimer();
   return { lock: () => np.setDisabled(true), destroy: () => {} };
 }
@@ -660,7 +716,7 @@ function readout(container, fields, { guided, unitText, onDone }) {
     label.textContent = `${f.label} = ?`;
     if (np) np.el.remove();
     np = numpad({ maxLen: 8, decimal: f.dec > 0, onSubmit: submit });
-    wrap.append(np.el);
+    put(wrap, np.el);
   };
   function submit(raw) {
     const f = fields[i];
@@ -680,7 +736,7 @@ function readout(container, fields, { guided, unitText, onDone }) {
     hint.hidden = false;
     hint.textContent = `${shown} — ჯერ არა. ${unitText(f)}`;
   }
-  container.append(wrap);
+  put(container, wrap);
   show();
   wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   return { lock: () => np?.setDisabled(true) };
@@ -697,6 +753,7 @@ function renderProgram(p, ctx) {
   let busy = false;
   let ro = null;
   const isMul = p.kind === 'mul';
+  const clock = liveClock(ctx);
   const topRod = Math.max(nRods(prog.answerBoard), nRods(steps[0].after), prog.unit + 1, p.place + 1);
   const instr = h('div', { class: 'instr' });
   const stepCount = h('div', { class: 'small muted' });
@@ -710,8 +767,8 @@ function renderProgram(p, ctx) {
   const after = h('div');
   const legend = h('div', { class: 'legend' }, h('b', null, '▼'), ` — აქ ჩაწერე ${isMul ? 'პირველი თანამამრავლის' : 'გასაყოფის'} ერთეულები`,
     guided ? [' · ', h('i', null, '▲'), ' — პასუხის ერთეულები'] : null);
-  ctx.body.append(
-    h('div', { class: 'prompt' }, h('div', { class: 'prompt-kind' }, KIND_TITLES[p.kind]),
+  put(ctx.body, 
+    h('div', { class: 'prompt' }, h('div', { class: 'row between' }, h('div', { class: 'prompt-kind' }, p.fix ? 'გაყოფა: საცდელი ციფრი და 修正' : KIND_TITLES[p.kind]), clock.el),
       h('div', { class: 'table-q' }, isMul ? mulText(p) : divText(p)), guided ? [instr, stepCount] : null),
     legend, host, hintBox, h('div', { class: 'actions row' }, hintBtn, checkBtn), after);
   const sv = new SorobanView(host, {
@@ -813,14 +870,200 @@ function renderProgram(p, ctx) {
   render();
   ctx.startTimer();
   return {
-    lock: () => { [showBtn, resetBtn, hintBtn, checkBtn].forEach((b) => { b.disabled = true; }); sv.setInteractive(false); ro?.lock(); },
-    destroy: () => sv.destroy()
+    lock: () => { clock.stop(); [showBtn, resetBtn, hintBtn, checkBtn].forEach((b) => { b.disabled = true; }); sv.setInteractive(false); ro?.lock(); },
+    destroy: () => { clock.stop(); sv.destroy(); }
   };
+}
+
+
+// --- ვიზუალიზაცია: სორობანი მოკლედ ჩანს, მერე ქრება ---
+function renderFlashRead(p, ctx) {
+  let attempts = 0;
+  let timer = null;
+  const host = h('div');
+  const note = h('div', { class: 'cover-note', hidden: true }, 'სორობანი დაიმალა — რა რიცხვი იყო?');
+  const hint = h('div', { class: 'hint', hidden: true });
+  const againBtn = h('button', { class: 'btn ghost wide', hidden: true, on: { click: () => show() } }, '👁 ნახე კიდევ ერთხელ');
+  put(ctx.body, promptBlock('flashread', h('div', { class: 'small muted' }, `სორობანი ${(p.ms / 1000).toFixed(1)} წამით გამოჩნდება. დაიმახსოვრე მძივების სურათი და ჩაწერე რიცხვი.`)),
+    host, note, hint, againBtn);
+  const sv = new SorobanView(host, { interactive: false, showValue: false, tools: [], compact: true, minRods: Math.max(3, digitCount(p.value)) });
+  sv.setValue(p.value);
+  const np = numpad({
+    maxLen: 6,
+    onSubmit: (v) => {
+      if (v === p.value) { ctx.done({ correct: attempts === 0, given: formatNumber(v), fixed: attempts > 0 }); return; }
+      if (!ctx.guided) { ctx.done({ correct: false, given: formatNumber(v) }); return; }
+      attempts += 1;
+      np.reset();
+      hint.hidden = false;
+      if (attempts === 1) {
+        hint.textContent = `${formatNumber(v)} — ჯერ არა. შეხედე კიდევ ერთხელ: ჯერ ღეროების რაოდენობა, მერე თითო ღერო მარცხნიდან (ზედა მძივი = 5, ქვედა = 1).`;
+        againBtn.hidden = false;
+      } else {
+        sv.setCovered(false);
+        note.hidden = true;
+        sv.setShowValue(true);
+        hint.textContent = `სწორი პასუხია ${formatNumber(p.value)}.`;
+        ctx.done({ correct: false, given: formatNumber(v) });
+      }
+    }
+  });
+  put(ctx.body, np.el);
+  function show() {
+    againBtn.hidden = true;
+    sv.setCovered(false);
+    note.hidden = true;
+    clearTimeout(timer);
+    timer = setTimeout(() => { if (!ctx.isDestroyed()) { sv.setCovered(true); note.hidden = false; } }, p.ms);
+  }
+  show();
+  ctx.startTimer();
+  return {
+    lock: () => { np.setDisabled(true); againBtn.disabled = true; clearTimeout(timer); sv.setCovered(false); note.hidden = true; },
+    destroy: () => { clearTimeout(timer); sv.destroy(); }
+  };
+}
+
+// ანძანის მინიშნება გამრავლებისთვის: 片落とし-ის ნაწილობრივი ნამრავლები
+function mentalMulHint(a, b) {
+  const ad = String(a).split('').reverse().map(Number);
+  const parts = ad.map((d, i) => `${d * 10 ** i} × ${b} = ${d * 10 ** i * b}`).filter((_, i) => ad[i]);
+  return `დაშალე პირველი რიცხვი თანრიგებად (როგორც სორობანზე, მარჯვნიდან): ${parts.join(', ')}. ახლა შეკრიბე გონებაში.`;
+}
+
+function mentalDivHint(a, b) {
+  const s = String(a);
+  let lead = Number(s[0]);
+  let len = 1;
+  if (lead < b && s.length > 1) { lead = Number(s.slice(0, 2)); len = 2; }
+  const q1 = Math.floor(lead / b);
+  return `დაიწყე მარცხნიდან: ${lead} : ${b} → ${q1} (${len === 1 ? 'პირველი ციფრი იყოფა' : 'პირველი ციფრი არ იყოფა, ვიღებთ ორს'}). დარჩა ${lead - q1 * b} — მიაწერე შემდეგი ციფრი და გააგრძელე.`;
+}
+
+// --- ანძანი: სვეტი, გამრავლება ან გაყოფა გონებაში (სორობანის გარეშე) ---
+function renderMental(p, ctx) {
+  let attempts = 0;
+  const clock = liveClock(ctx);
+  const hint = h('div', { class: 'hint', hidden: true });
+  let main;
+  if (p.kind === 'mentalmul') main = h('div', { class: 'table-q' }, `${p.a} × ${p.b} = ?`);
+  else if (p.kind === 'mentaldiv') main = h('div', { class: 'table-q' }, `${p.a} : ${p.b} = ?`);
+  else main = termsSheet(p);
+  put(ctx.body, h('div', { class: 'prompt' }, h('div', { class: 'row between' }, h('div', { class: 'prompt-kind' }, KIND_TITLES[p.kind]), clock.el), main,
+    h('div', { class: 'small muted' }, 'წარმოიდგინე სორობანი და მძივები გონებაში გადააადგილე.')), hint);
+  const np = numpad({
+    maxLen: 6,
+    onSubmit: (v) => {
+      if (v === p.answer) { ctx.done({ correct: attempts === 0, given: formatNumber(v), fixed: attempts > 0 }); return; }
+      if (!ctx.guided) { ctx.done({ correct: false, given: formatNumber(v) }); return; }
+      attempts += 1;
+      np.reset();
+      hint.hidden = false;
+      if (attempts === 1) {
+        if (p.kind === 'mentalmul') hint.textContent = `${formatNumber(v)} — ჯერ არა. ${mentalMulHint(p.a, p.b)}`;
+        else if (p.kind === 'mentaldiv') hint.textContent = `${formatNumber(v)} — ჯერ არა. ${mentalDivHint(p.a, p.b)}`;
+        else {
+          const parts = [];
+          let run = p.terms[0];
+          for (let i = 1; i < p.terms.length - 1; i++) { run += p.terms[i]; parts.push(formatNumber(run)); }
+          hint.textContent = `${formatNumber(v)} — ჯერ არა. შუალედური ჯამები: ${formatNumber(p.terms[0])} → ${parts.join(' → ')} → ? ბოლო ნაბიჯი თავად გააკეთე.`;
+        }
+      } else {
+        hint.textContent = `სწორი პასუხია ${formatNumber(p.answer)}.`;
+        ctx.done({ correct: false, given: formatNumber(v) });
+      }
+    }
+  });
+  put(ctx.body, np.el);
+  ctx.startTimer();
+  return { lock: () => { clock.stop(); np.setDisabled(true); }, destroy: () => clock.stop() };
+}
+
+// --- სწრაფი ანძანი: რიცხვები ციმციმებს, სორობანის გარეშე ---
+function renderFlash(p, ctx) {
+  const progress = ctx.progress;
+  let speed = Number(progress.settings.flashSpeed) || 1.5;
+  let attempts = 0;
+  const speedLabel = h('span', { class: 'speed-label' });
+  const range = h('input', {
+    type: 'range', min: '0.3', max: '3', step: '0.05', value: String(speed), 'aria-label': 'სიჩქარე',
+    on: { input: (e) => { speed = Number(e.target.value); upd(); }, change: () => progress.setSetting('flashSpeed', speed) }
+  });
+  const speedBox = h('div', { class: 'speed' }, h('label', null, 'სიჩქარე: ', speedLabel), range,
+    h('div', { class: 'row between small muted' }, h('span', null, 'სწრაფი'), h('span', null, 'ნელი')));
+  function upd() { speedLabel.textContent = `${speed.toFixed(2)} წმ თითო რიცხვზე`; }
+  upd();
+  const flash = h('div', { class: 'flash' }, 'მზად ხარ?');
+  const count = h('div', { class: 'flash-count small muted' }, `${p.terms.length} რიცხვი`);
+  const hint = h('div', { class: 'hint', hidden: true });
+  const startBtn = h('button', { class: 'btn primary wide', on: { click: () => play(1) } }, '▶ დაწყება');
+  const replayBtn = h('button', { class: 'btn ghost wide', hidden: true, on: { click: () => play(1.5) } }, '▶ ნახე კიდევ ერთხელ (ნელა)');
+  const npHost = h('div', { hidden: true });
+  put(ctx.body, promptBlock('flash', h('div', { class: 'small muted' }, 'რიცხვები სწრაფად გამოჩნდება — ყოველი გონებაში წარმოსახვით სორობანზე დაუმატე. ბოლოს ჯამი ჩაწერე.')),
+    speedBox, h('div', { class: 'flash-box' }, flash, count), hint, h('div', { class: 'actions' }, startBtn, replayBtn), npHost);
+  const np = numpad({
+    maxLen: 6,
+    onSubmit: (v) => {
+      if (v === p.answer) { ctx.done({ correct: attempts === 0, given: formatNumber(v), fixed: attempts > 0 }); return; }
+      if (!ctx.guided) { ctx.done({ correct: false, given: formatNumber(v) }); return; }
+      attempts += 1;
+      np.reset();
+      hint.hidden = false;
+      if (attempts === 1) {
+        hint.textContent = `${formatNumber(v)} — ჯერ არა. ნახე კიდევ ერთხელ, უფრო ნელა.`;
+        replayBtn.hidden = false;
+        npHost.hidden = true;
+      } else {
+        hint.textContent = `სწორი პასუხია ${formatNumber(p.answer)}.`;
+        ctx.done({ correct: false, given: formatNumber(v) });
+      }
+    }
+  });
+  put(npHost, np.el);
+  let started = false;
+  async function play(slow) {
+    startBtn.hidden = true;
+    replayBtn.hidden = true;
+    speedBox.hidden = true;
+    npHost.hidden = true;
+    if (!started) { ctx.startTimer(); started = true; }
+    const t = speed * slow * 1000;
+    for (let i = 0; i < p.terms.length; i++) {
+      if (ctx.isDestroyed()) return;
+      flash.textContent = formatNumber(p.terms[i]);
+      flash.classList.add('pop');
+      count.textContent = `${i + 1} / ${p.terms.length}`;
+      await sleep(t * 0.75);
+      flash.classList.remove('pop');
+      flash.textContent = '';
+      await sleep(t * 0.25);
+    }
+    if (ctx.isDestroyed()) return;
+    flash.textContent = '= ?';
+    count.textContent = 'ჩაწერე ჯამი';
+    npHost.hidden = false;
+    np.reset();
+  }
+  return {
+    lock: () => {
+      np.setDisabled(true);
+      replayBtn.disabled = true;
+      flash.textContent = `${exprOf(p)} = ${formatNumber(p.answer)}`;
+      flash.classList.add('small-flash');
+    },
+    destroy: () => {}
+  };
+}
+
+// ერთი ამოცანის ჩვენება (გამოყენებულია გამოცდის რეჟიმშიც)
+export function renderProblem(p, ctx) {
+  return RENDERERS[p.kind](p, ctx);
 }
 
 const RENDERERS = {
   read: renderRead, set: renderSet, calc: renderCalc, column: renderColumn,
-  table: renderTable, mul: renderProgram, div: renderProgram
+  table: renderTable, mul: renderProgram, div: renderProgram,
+  flashread: renderFlashRead, mental: renderMental, mentalmul: renderMental, mentaldiv: renderMental, flash: renderFlash
 };
 
 export { PLACE_GEN };

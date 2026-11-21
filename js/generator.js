@@ -26,6 +26,8 @@ function pick(rng, arr) {
 }
 
 export function problemKey(p) {
+  if (p.kind === 'flashread') return `flashread:${p.value}`;
+  if (p.kind === 'mentalmul' || p.kind === 'mentaldiv') return `${p.kind}:${p.a}:${p.b}`;
   if (p.kind === 'mul' || p.kind === 'div' || p.kind === 'table') {
     return `${p.kind}:${p.a}/${p.aDec || 0}:${p.b}/${p.bDec || 0}:${p.qDec || 0}`;
   }
@@ -176,12 +178,40 @@ function genDiv(spec, level, rng) {
     const aDec = qDec; // ათწილადი გასაყოფი: განაყოფს იმდენივე ციფრი აქვს მძიმის შემდეგ
     if (nDigits(a) > 5) continue;
     try {
-      const prog = divProgram({ a, b, place, aDec, decimals: qDec });
+      const prog = divProgram({ a, b, place, aDec, decimals: qDec, estimate: spec.fix ? 'trial' : 'exact' });
       if (prog.remBoard !== r * 10 ** (place - aDec)) continue;
-      return { kind: 'div', a, b, aDec, qDec, place, ansUnit: prog.unit, q, r, answer: q, level: level.id };
+      if (spec.fix && !prog.qDigits.some((d) => d.corrections > 0)) continue; // 修正-ის დონეზე საცდელი ციფრი ერთხელ მაინც უნდა შესწორდეს
+      const out = { kind: 'div', a, b, aDec, qDec, place, ansUnit: prog.unit, q, r, answer: q, level: level.id };
+      if (spec.fix) out.fix = true;
+      return out;
     } catch (e) { /* არ ეტევა */ }
   }
   throw new Error(`გაყოფის მაგალითი ვერ შეიქმნა (${JSON.stringify(spec)})`);
+}
+
+// ვიზუალიზაცია: სორობანის სურათი მოკლედ ჩანს, მერე ქრება
+function genFlashRead(spec, level, rng) {
+  const value = randDigits(rng, spec.minDigits || 1, spec.maxDigits || spec.minDigits || 1);
+  return { kind: 'flashread', value, answer: value, ms: spec.ms || 2000, level: level.id };
+}
+
+// ანძანი: გამრავლება და გაყოფა გონებაში
+function genMentalMul(spec, level, rng) {
+  const [mn, mx] = spec.aDigits || [2, 2];
+  for (;;) {
+    const a = randDigits(rng, mn, mx);
+    if (a % 10 === 0) continue;
+    const b = (spec.bDigits || 1) === 1 ? randInt(rng, 2, 9) : randInt(rng, 11, 99);
+    if (b % 10 === 0) continue;
+    return { kind: 'mentalmul', a, b, answer: a * b, level: level.id };
+  }
+}
+
+function genMentalDiv(spec, level, rng) {
+  const [mn, mx] = spec.qDigits || [2, 2];
+  const b = (spec.bDigits || 1) === 1 ? randInt(rng, 2, 9) : randInt(rng, 11, 99);
+  const q = randDigits(rng, mn, mx);
+  return { kind: 'mentaldiv', a: q * b, b, q, answer: q, level: level.id };
 }
 
 function genTerms(spec, level, rng) {
@@ -255,7 +285,15 @@ function genTerms(spec, level, rng) {
 
 export function generateProblem(spec, level, rng = Math.random) {
   if (spec.kind === 'read' || spec.kind === 'set') return spec.unit ? genDecimalNumber(spec, level, rng) : genNumber(spec, level, rng);
-  if (spec.kind === 'calc' || spec.kind === 'column') return genTerms(spec, level, rng);
+  if (spec.kind === 'calc' || spec.kind === 'column') {
+    const p = genTerms(spec, level, rng);
+    if (spec.ghost) p.ghost = true;
+    return p;
+  }
+  if (spec.kind === 'mental' || spec.kind === 'flash') return genTerms(spec, level, rng);
+  if (spec.kind === 'flashread') return genFlashRead(spec, level, rng);
+  if (spec.kind === 'mentalmul') return genMentalMul(spec, level, rng);
+  if (spec.kind === 'mentaldiv') return genMentalDiv(spec, level, rng);
   if (spec.kind === 'table') return genTable(spec, level, rng);
   if (spec.kind === 'mul') return genMul(spec, level, rng);
   if (spec.kind === 'div') return genDiv(spec, level, rng);
@@ -287,4 +325,23 @@ export function shuffle(arr, rng = Math.random) {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+// „კენტეის მსგავსი“ გამოცდის ამოცანები სექციებად (EXAM_GRADES ფორმატით)
+export function buildExam(grade, level, rng = Math.random) {
+  const out = [];
+  for (const sec of grade.sections) {
+    const seen = new Set();
+    for (let i = 0; i < sec.n; i++) {
+      const spec = sec.specs[i % sec.specs.length];
+      let p = null;
+      for (let t = 0; t < 25; t++) {
+        p = generateProblem(spec, level, rng);
+        if (!seen.has(problemKey(p))) break;
+      }
+      seen.add(problemKey(p));
+      out.push({ ...p, section: sec.key, points: sec.points });
+    }
+  }
+  return out;
 }

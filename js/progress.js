@@ -13,6 +13,7 @@ const MAX_DAYS = 400;
 export const DEFAULT_SETTINGS = {
   theme: 'auto',        // 'auto' | 'light' | 'dark'
   columnSpeed: 3,       // წამი თითო რიცხვზე სვეტურ ჯამში
+  flashSpeed: 1.5,      // წამი თითო რიცხვზე flash anzan-ში (90%+-ის შემდეგ ავტომატურად მცირდება)
   showValue: true,      // მნიშვნელობის ჩვენება ნაგულისხმევად (თავისუფალ სორობანზე)
   dailyGoalMin: 20
 };
@@ -156,6 +157,7 @@ export class Progress {
   isUnlocked(id) {
     const lvl = getLevel(id);
     if (!lvl || !lvl.built) return false;
+    if (lvl.requires !== undefined) return this.isPassed(lvl.requires);
     const prev = prevBuilt(lvl.id);
     return prev ? this.isPassed(prev.id) : true;
   }
@@ -163,7 +165,7 @@ export class Progress {
   // პირველი აწყობილი, გახსნილი და ჯერ გაუვლელი დონე (null — თუ ეტაპის ყველა დონე გავლილია)
   currentLevelId() {
     for (const l of LEVELS) {
-      if (!l.built) continue;
+      if (!l.built || l.optional) continue;
       if (!this.isPassed(l.id)) return this.isUnlocked(l.id) ? l.id : null;
     }
     return null;
@@ -205,6 +207,11 @@ export class Progress {
       correct: lv.correct + (correct ? 1 : 0),
       ms: lv.ms + t
     };
+    if (problem && problem.kind) {
+      if (!this.data.kinds || typeof this.data.kinds !== 'object') this.data.kinds = {};
+      const k = this.data.kinds[problem.kind] || { answered: 0, correct: 0, ms: 0 };
+      this.data.kinds[problem.kind] = { answered: k.answered + 1, correct: k.correct + (correct ? 1 : 0), ms: k.ms + t };
+    }
     if (mistakeId) this.resolveMistake(mistakeId, correct);
     else if (!correct && problem) this.addMistake(problem, level);
     this.pruneDays();
@@ -276,6 +283,20 @@ export class Progress {
     }
     this.data.levels[String(level)] = { ...lv, ...patch };
     this.save();
+  }
+
+  // „კენტეის მსგავსი“ გამოცდის შედეგი
+  addExam(entry) {
+    if (!Array.isArray(this.data.exams)) this.data.exams = [];
+    this.data.exams.push({ ...entry, day: this.today() });
+    if (this.data.exams.length > 100) this.data.exams.splice(0, this.data.exams.length - 100);
+    this.markPlan('learn');
+    this.save();
+  }
+
+  bestExam(gradeId) {
+    const list = (this.data.exams || []).filter((e) => e.grade === gradeId);
+    return list.length ? list.reduce((a, b) => (b.score > a.score ? b : a)) : null;
   }
 
   markPlan(block) {

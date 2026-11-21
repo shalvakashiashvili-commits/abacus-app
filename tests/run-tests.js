@@ -4,6 +4,7 @@
 // 3) გენერატორი: თითო დონეზე (თითო სპეციფიკაციაზე) 500 მაგალითი — მხოლოდ ნასწავლი ფორმულები, სწორი პასუხი
 // 4) გაკვეთილების დემოები, პროგრესი, sw.js ქეშის სია, manifest, ფარდობითი მისამართები
 // 5) ეტაპი 2: 片落とし გამრავლება/გაყოფა დამოუკიდებელი სიმულაციით, 500 მაგალითი თითო ახალ ტიპზე, ათწილადები
+// 6) ეტაპი 3: ანძანი, flash, ვიზუალიზაცია, 修正 (還元) დამოუკიდებელი სიმულაციით, „კენტეის მსგავსი“ გამოცდა ოფიციალური ცხრილით
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, normalize } from 'node:path';
@@ -11,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 
 import { Soroban, toDigits, MAX_RODS } from '../js/soroban.js';
 import { analyze, hintFor, demoSteps } from '../js/techniques.js';
-import { generateProblem, buildSet, makeRng, problemKey } from '../js/generator.js';
-import { LEVELS, getLevel, testSize, TEST_SIZE, levelLabel } from '../js/levels.js';
+import { generateProblem, buildSet, makeRng, problemKey, buildExam } from '../js/generator.js';
+import { LEVELS, getLevel, testSize, TEST_SIZE, levelLabel, EXAM_GRADES } from '../js/levels.js';
 import { mulProgram, divProgram, programFor, fmtScaled, parseScaled } from '../js/muldiv.js';
 import { LESSONS } from '../js/lessons.js';
 import { Progress, memoryStorage, PROGRESS_KEY } from '../js/progress.js';
@@ -348,17 +349,18 @@ test('გენერატორი: ტესტი = 20 მაგალით
   }
 });
 
-test('დონეები: კონფიგურაცია (სრული გეგმა 0–10, აწყობილი 0–4 და 5ა–8ბ, 9–10 დაბლოკილი)', () => {
+test('დონეები: კონფიგურაცია (სრული გეგმა 0–10 ქვედონეებით + არასავალდებულო 修正)', () => {
   const ids = LEVELS.map((l) => String(l.id));
-  const expected = ['0', '1', '2', '3', '4', '5a', '5b', '6a', '6b', '6c', '7a', '7b', '7c', '8a', '8b', '9', '10'];
+  const expected = ['0', '1', '2', '3', '4', '5a', '5b', '6a', '6b', '6c', '7a', '7b', '7c', '8a', '8b', '9a', '9b', '9c', '10a', '10b', 'fix'];
   assert(JSON.stringify(ids) === JSON.stringify(expected), `დონეების რიგი: ${ids.join(',')}`);
-  for (const id of expected.slice(0, 15)) assert(getLevel(id).built, `დონე ${id} აწყობილი უნდა იყოს`);
-  assert(!getLevel(9).built && !getLevel(10).built, 'დონეები 9–10 დაბლოკილი უნდა დარჩეს');
+  for (const id of expected) assert(getLevel(id).built, `დონე ${id} აწყობილი უნდა იყოს`);
+  assert(getLevel('fix').optional && getLevel('fix').requires === '7b', '修正 — არასავალდებულო, იხსნება 7ბ-ის შემდეგ');
+  assert(LEVELS.filter((l) => l.optional).length === 1, 'მხოლოდ ერთი არასავალდებულო დონე');
   for (let i = 0; i <= 2; i++) assert(getLevel(i).test.maxAvgSec === null, `დონე ${i}: დროის ლიმიტი არ უნდა იყოს`);
   for (let i = 3; i <= 4; i++) assert(getLevel(i).test.maxAvgSec === 10, `დონე ${i}: ლიმიტი 10 წმ`);
   assert(getLevel('5a').test.maxAvgSec > 0 && getLevel('5b').test.maxAvgSec > 0, 'დონე 5: ტესტში დროის ლიმიტი');
   // ფორმულები თანმიმდევრულად ემატება: ყოველი დონე წინას ნასწავლს მოიცავს
-  for (let i = 1; i < 15; i++) {
+  for (let i = 1; i < 20; i++) {
     const prev = new Set(getLevel(expected[i - 1]).allowed);
     assert([...prev].every((t) => getLevel(expected[i]).allowed.includes(t)), `დონე ${expected[i]}: წინა დონის ფორმულები აკლია`);
   }
@@ -806,7 +808,7 @@ test('ათწილადები: ჩვენება და წაკი�
   assert(parseScaled('1,2345', 3) === null && parseScaled('abc', 3) === null, 'არასწორი შეყვანა');
 });
 
-test('პროგრესი: ქვედონეები რიგრიგობით იხსნება, 9–10 დაბლოკილი რჩება', () => {
+test('პროგრესი: ქვედონეები რიგრიგობით იხსნება (ეტაპი 2 → ეტაპი 3)', () => {
   const pr = new Progress(memoryStorage(), () => new Date(2026, 10, 25, 10));
   for (let i = 0; i <= 4; i++) pr.recordSession({ level: i, mode: 'test', accuracy: 1, avgSec: 3, passed: true });
   assert(pr.currentLevelId() === '5a' && pr.isUnlocked('5a') && !pr.isUnlocked('5b'), 'დონე 4-ის შემდეგ იხსნება 5ა');
@@ -814,12 +816,311 @@ test('პროგრესი: ქვედონეები რიგრი�
     assert(pr.isUnlocked(id), `${id} უნდა იყოს გახსნილი`);
     pr.recordSession({ level: id, mode: 'test', accuracy: 1, avgSec: 3, passed: true });
   }
-  assert(!pr.isUnlocked(9) && !pr.isUnlocked(10) && pr.currentLevelId() === null, '9–10 დაბლოკილი');
+  assert(pr.currentLevelId() === '9a' && pr.isUnlocked('9a') && !pr.isUnlocked('9b'), '8ბ-ის შემდეგ იხსნება 9ა');
   // ეტაპი 1-ის შენახული პროგრესი (რიცხვითი გასაღებები) ისევ იკითხება
   const st = memoryStorage();
   st.setItem(PROGRESS_KEY, JSON.stringify({ version: 1, levels: { '0': { passed: true }, '4': { passed: true }, '3': { passed: true }, '2': { passed: true }, '1': { passed: true } }, days: {}, mistakes: [] }));
   const old = new Progress(st);
   assert(old.isPassed(4) && old.currentLevelId() === '5a', 'ძველი პროგრესი შენარჩუნებულია');
+});
+
+// =====================================================================
+// ეტაპი 3: ვიზუალიზაცია, ანძანი, flash anzan, „კენტეის მსგავსი“ გამოცდა, 修正
+// =====================================================================
+
+// 修正 (還元): დამოუკიდებელი სიმულაცია. საცდელი ციფრი = min(9, ⌊(ნაწილის პირველი ციფრები) / (გამყოფის პირველი ციფრი)⌋);
+// როცა ნამრავლი აღარ აკლდება: ციფრი −1 და უკვე გამოკლებული 1 × (გამყოფის ციფრები) ბრუნდება იმავე ღეროებზე.
+function refDivTrial(a, b, place) {
+  const bd = String(b).split('').map(Number);
+  const n = bd.length;
+  const unit = place + n + 1;
+  const qRods = new Array(MAX_RODS).fill(0);
+  let remVal = a * 10 ** place;
+  const seq = [remVal];
+  let corrections = 0;
+  for (let g = 0; g < 50; g++) {
+    const rem = rodsOf(remVal);
+    let head = -1;
+    for (let p = MAX_RODS - 1; p >= 0; p--) if (rem[p]) { head = p; break; }
+    if (head < 0) break;
+    const lead = (len) => { let v = 0; for (let k = 0; k < len; k++) { const p = head - k; v = v * 10 + (p >= 0 ? rem[p] : 0); } return v; };
+    let qRod, chunk;
+    if (lead(n) >= b) { qRod = head + 2; chunk = lead(n); } else { qRod = head + 1; chunk = lead(n + 1); }
+    if (qRod < unit || qRod - n - 1 < 0) break;
+    let cur = Math.min(9, Math.floor(Math.floor(chunk / 10 ** (n - 1)) / bd[0]));
+    qRods[qRod] = cur;
+    seq.push(valueOf(qRods) + remVal);
+    const subtracted = [];
+    for (let k = 0; k < n; k++) {
+      for (;;) {
+        const prod = cur * bd[k];
+        const pos = qRod - 2 - k;
+        if (prod * 10 ** pos <= remVal) {
+          remVal -= prod * 10 ** pos;
+          if (prod) seq.push(valueOf(qRods) + remVal);
+          subtracted.push(k);
+          break;
+        }
+        corrections += 1;
+        cur -= 1;
+        assert(cur >= 1, 'refDivTrial: ციფრი 0-მდე ჩამოვიდა');
+        qRods[qRod] = cur;
+        seq.push(valueOf(qRods) + remVal);
+        for (const k2 of subtracted) {
+          if (!bd[k2]) continue;
+          remVal += bd[k2] * 10 ** (qRod - 2 - k2);
+          seq.push(valueOf(qRods) + remVal);
+        }
+      }
+    }
+  }
+  return { seq, unit, qBoard: valueOf(qRods), remBoard: remVal, corrections };
+}
+
+function checkFixDiv(p, label) {
+  const prog = programFor(p);
+  const ref = refDivTrial(p.a, p.b, p.place);
+  const engSeq = prog.steps.map((s) => s.after);
+  assert(JSON.stringify(engSeq) === JSON.stringify(ref.seq), `${label}: 修正-ის ნაბიჯები არ ემთხვევა შემმოწმებელს`);
+  assert(ref.corrections >= 1, `${label}: შესწორება საჭირო არ გახდა`);
+  assert(executeProgram(prog) === ref.qBoard + ref.remBoard, `${label}: ფიზიკური შესრულება`);
+  const exact = divProgram({ a: p.a, b: p.b, place: p.place });
+  assert(exact.answerBoard === prog.answerBoard, `${label}: 修正-ის შედეგი ზუსტი მეთოდის შედეგს არ ემთხვევა`);
+  assert(p.a === p.b * p.q + p.r && ref.qBoard === p.q * 10 ** ref.unit, `${label}: განაყოფი`);
+  assert(prog.steps.some((s) => s.type === 'correct') && prog.steps.some((s) => s.type === 'giveback' || s.type === 'correct'), `${label}: შესწორების ნაბიჯი`);
+}
+
+function checkTermsBasic(p, spec, label, { addOnly = false } = {}) {
+  assert(Array.isArray(p.terms) && p.terms.length === spec.terms, `${label}: რიცხვების რაოდენობა`);
+  let total = 0;
+  p.terms.forEach((t, i) => {
+    assert(Number.isInteger(t) && t !== 0, `${label}: რიცხვი ${t}`);
+    if (addOnly) assert(t > 0, `${label}: flash anzan-ში მხოლოდ მიმატებაა (${t})`);
+    const d = String(Math.abs(t)).length;
+    if (i === 0 || t > 0) assert(d >= (spec.minDigits || 1) && d <= spec.digits, `${label}: ნიშნები ${t}`);
+    else assert(d <= spec.digits, `${label}: ნიშნები ${t}`);
+    if (i > 0) {
+      const a = analyze(total, t);
+      assert(a.ok && executeSteps(total, a) === total + t, `${label}: ნაბიჯები`);
+    }
+    total += t;
+    assert(total > 0, `${label}: შუალედური ჯამი ≤ 0`);
+  });
+  assert(p.answer === total, `${label}: პასუხი ${p.answer} ≠ ${total}`);
+}
+
+const STAGE3_KINDS = {
+  '9a': ['flashread', 'calc'], '9b': ['mental'], '9c': ['mentalmul', 'mentaldiv'],
+  '10a': ['flash'], '10b': ['calc', 'mul', 'div'], fix: ['div']
+};
+
+function checkStage3Problem(p, spec, level, label) {
+  const lid = String(level.id);
+  assert(p.kind === spec.kind && String(p.level) === lid, `${label}: kind/level`);
+  assert(STAGE3_KINDS[lid].includes(p.kind), `${label}: ტიპი ${p.kind} ამ დონეზე არ ისწავლება`);
+  assert(!p.unit && !p.aDec && !p.bDec && !p.qDec, `${label}: ათწილადი ამ დონეზე არ არის`);
+  if (p.kind === 'flashread') {
+    const d = String(p.value).length;
+    assert(d >= spec.minDigits && d <= spec.maxDigits && p.answer === p.value && p.ms === spec.ms && p.value > 0, `${label}: ვიზუალიზაცია`);
+  } else if (p.kind === 'calc') {
+    if (lid === '9a') assert(p.ghost === true, `${label}: მოჩვენებითი სორობანი`);
+    checkTermsBasic(p, spec, label, { addOnly: spec.ops === 'add' });
+  } else if (p.kind === 'mental') {
+    checkTermsBasic(p, spec, label);
+  } else if (p.kind === 'flash') {
+    checkTermsBasic(p, spec, label, { addOnly: true });
+  } else if (p.kind === 'mentalmul') {
+    const ad = String(p.a).length, bd = String(p.b).length;
+    assert(ad >= spec.aDigits[0] && ad <= spec.aDigits[1] && bd === spec.bDigits, `${label}: ნიშნები`);
+    let prod = 0; // დამოუკიდებელი გამრავლება თანრიგებით
+    String(p.a).split('').reverse().forEach((d, i) => { prod += Number(d) * 10 ** i * p.b; });
+    assert(p.answer === prod, `${label}: ${p.a} × ${p.b} ≠ ${p.answer}`);
+  } else if (p.kind === 'mentaldiv') {
+    const qd = String(p.q).length;
+    assert(String(p.b).length === spec.bDigits && qd >= spec.qDigits[0] && qd <= spec.qDigits[1], `${label}: ნიშნები`);
+    assert(p.a === p.b * p.q && p.answer === p.q, `${label}: ${p.a} : ${p.b} ≠ ${p.q}`);
+  } else if (p.kind === 'mul') {
+    assert(String(p.b).length === spec.bDigits, `${label}: მეორე თანამამრავლი`);
+    checkMul(p, label);
+  } else if (p.kind === 'div') {
+    assert(String(p.b).length === spec.bDigits && p.r === 0, `${label}: გამყოფი/ნაშთი`);
+    if (lid === 'fix') { assert(p.fix === true, `${label}: 修正`); checkFixDiv(p, label); }
+    else { assert(!p.fix, `${label}: 修正 ამ დონეზე არ ისწავლება`); checkDiv(p, label); }
+  }
+}
+
+for (const lid of Object.keys(STAGE3_KINDS)) {
+  test(`გენერატორი: დონე ${levelLabel(getLevel(lid))} — ${N_PER_SPEC} მაგალითი თითო სპეციფიკაციაზე`, () => {
+    const level = getLevel(lid);
+    const specs = [
+      ...level.guided.map((s) => ['guided', s]),
+      ...level.tasks.map((s) => ['tasks', s]),
+      ...level.test.items.map((s) => ['test', s])
+    ];
+    let total = 0;
+    const kinds = {};
+    specs.forEach(([mode, spec], si) => {
+      const rng = makeRng(9000 + Object.keys(STAGE3_KINDS).indexOf(lid) * 100 + si);
+      const label = `დ${lid} ${mode} ${JSON.stringify(spec)}`;
+      for (let i = 0; i < N_PER_SPEC; i++) {
+        const p = generateProblem(spec, level, rng);
+        checkStage3Problem(p, spec, level, label);
+        kinds[p.kind] = (kinds[p.kind] || 0) + 1;
+        total++;
+      }
+    });
+    note(`${total} მაგალითი · ${Object.entries(kinds).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+  });
+}
+
+test('修正: წყაროს მაგალითი 168 : 28 (საცდელი 8 → 7 → 6) და ამომწურავი შემოწმება', () => {
+  const prog = divProgram({ a: 168, b: 28, place: 0, estimate: 'trial' });
+  const ref = refDivTrial(168, 28, 0);
+  assert(ref.corrections === 2 && prog.qDigits[0].trial === 8 && prog.qDigits[0].q === 6, '168:28 — საცდელი 8, ორი შესწორება, პასუხი 6');
+  assert(prog.answerBoard === 6000, '168:28 = 6 (▲ = მე-4 ღერო)');
+  let n = 0, withFix = 0;
+  for (let b = 11; b <= 99; b++) {
+    if (b % 10 === 0) continue;
+    for (let q = 1; q <= 99; q += 2) {
+      const a = q * b;
+      if (String(a).length > 5) continue;
+      const pr = divProgram({ a, b, place: 0, estimate: 'trial' });
+      const rf = refDivTrial(a, b, 0);
+      assert(JSON.stringify(pr.steps.map((s) => s.after)) === JSON.stringify(rf.seq), `${a}:${b}: ნაბიჯები`);
+      assert(pr.answerBoard === q * 10 ** 3 && executeProgram(pr) === pr.answerBoard, `${a}:${b}: შედეგი`);
+      for (const d of pr.qDigits) assert(d.trial >= d.q, `${a}:${b}: საცდელი ციფრი სწორზე ნაკლებია`);
+      if (rf.corrections) withFix++;
+      n++;
+    }
+  }
+  note(`${n.toLocaleString('en-US')} გაყოფა, ${withFix.toLocaleString('en-US')}-ში საჭირო გახდა შესწორება`);
+});
+
+// ოფიციალური ცხრილი (日本珠算連盟, https://www.shuzan.jp/kentei/shuzan/) — აქ დამოუკიდებლად ჩაწერილი
+const OFFICIAL = {
+  g9: { minutes: 20, pass: 120, total: 200, mitori: { n: 10, kuchi: 5, ji: 10 }, kake: { n: 20, digits: 3 } },
+  g8: { minutes: 20, pass: 120, total: 200, mitori: { n: 10, kuchi: 8, ji: 16 }, kake: { n: 10, digits: 4 }, wari: { n: 10, digits: 3 } },
+  g7: { minutes: 20, pass: 120, total: 200, mitori: { n: 10, kuchi: 10, ji: 20 }, kake: { n: 10, digits: 4 }, wari: { n: 10, digits: 4 } },
+  g6: { minutes: 30, pass: 210, total: 300, mitori: { n: 10, kuchi: 10, ji: 30 }, kake: { n: 20, digits: 5 }, wari: { n: 20, digits: 4 } }
+};
+
+test('„კენტეის მსგავსი“ გამოცდა: ფორმატი ოფიციალურ ცხრილს ემთხვევა, 500 ამოცანა თითო სექციაზე', () => {
+  const level = getLevel('10b');
+  let count = 0;
+  for (const g of EXAM_GRADES) {
+    const off = OFFICIAL[g.id];
+    assert(off, `${g.id}: ოფიციალური მონაცემი არ არის`);
+    assert(g.minutes === off.minutes && g.pass === off.pass && g.total === off.total, `${g.id}: დრო/ქულა`);
+    const pts = g.sections.reduce((s, x) => s + x.points * x.n, 0);
+    assert(pts === off.total, `${g.id}: ქულების ჯამი ${pts} ≠ ${off.total}`);
+    for (const sec of g.sections) {
+      const o = off[sec.key];
+      assert(o && o.n === sec.n, `${g.id}/${sec.key}: ამოცანების რაოდენობა`);
+      assert(sec.points === (sec.key === 'mitori' ? 10 : 5), `${g.id}/${sec.key}: ქულა ამოცანაზე`);
+    }
+    for (const k of Object.keys(off)) if (typeof off[k] === 'object') assert(g.sections.some((s) => s.key === k), `${g.id}: სექცია ${k} აკლია`);
+    const rng = makeRng(4242 + count);
+    const per = {};
+    for (let rep = 0; per.min === undefined || Object.values(per).some((v) => v < 500); rep++) {
+      const exam = buildExam(g, level, rng);
+      assert(exam.length === g.sections.reduce((s, x) => s + x.n, 0), `${g.id}: ამოცანების რაოდენობა გამოცდაში`);
+      for (const p of exam) {
+        const sec = g.sections.find((s) => s.key === p.section);
+        const o = off[p.section];
+        const label = `${g.id}/${p.section}`;
+        if (p.section === 'mitori') {
+          assert(p.kind === 'calc' && p.terms.length === o.kuchi, `${label}: 口数`);
+          const ji = p.terms.reduce((s, t) => s + String(Math.abs(t)).length, 0);
+          assert(ji === o.ji, `${label}: 字数 ${ji} ≠ ${o.ji}`);
+          checkTermsBasic(p, sec.specs[0], label, { addOnly: sec.specs[0].ops === 'add' });
+        } else if (p.section === 'kake') {
+          assert(p.kind === 'mul' && String(p.a).length + String(p.b).length === o.digits, `${label}: 実法 ${o.digits} けた`);
+          checkMul(p, label);
+        } else {
+          assert(p.kind === 'div' && String(p.b).length + String(p.q).length === o.digits && p.r === 0, `${label}: 法商 ${o.digits} けた`);
+          checkDiv(p, label);
+        }
+        per[p.section] = (per[p.section] || 0) + 1;
+        count++;
+      }
+      per.min = 0;
+      if (rep > 200) break;
+    }
+    delete per.min;
+    for (const [k, v] of Object.entries(per)) assert(v >= 500, `${g.id}/${k}: მხოლოდ ${v} ამოცანა`);
+  }
+  note(`${count.toLocaleString('en-US')} ამოცანა 4 დონის გამოცდებში`);
+});
+
+test('ეტაპი 3: გაკვეთილების დემოები ფიზიკურად სრულდება და სწორ პასუხს იძლევა', () => {
+  let n = 0;
+  for (const lid of Object.keys(STAGE3_KINDS)) {
+    const cards = LESSONS[lid];
+    assert(Array.isArray(cards) && cards.length >= 4, `დონე ${lid}: გაკვეთილი აკლია`);
+    for (const c of cards) {
+      assert(c.title && Array.isArray(c.text) && c.text.length, `დონე ${lid}: ბარათი`);
+      for (const ex of c.demo?.program || []) {
+        const spec = ex.mul || ex.div;
+        const prog = ex.mul ? mulProgram(ex.mul) : divProgram(ex.div);
+        const final = executeProgram(prog);
+        if (ex.mul) assert(final === refMul(spec.a, spec.b, spec.place).board, `„${c.title}“: დემო`);
+        else if (ex.div.estimate === 'trial') {
+          const rf = refDivTrial(spec.a, spec.b, spec.place);
+          assert(final === rf.qBoard + rf.remBoard && rf.corrections > 0, `„${c.title}“: 修正-ის დემო`);
+        } else assert(final === refDiv(spec.a, spec.b, spec.place).qBoard, `„${c.title}“: დემო`);
+        const expected = ex.mul ? spec.a * spec.b : Math.floor(spec.a / spec.b);
+        assert(Number(ex.answer.replace(/\D/g, '')) === expected, `„${c.title}“: პასუხი ${ex.answer} ≠ ${expected}`);
+        n++;
+      }
+      for (const ex of c.demo?.calc || []) {
+        const ds = demoSteps(ex.start, ex.ops);
+        const sb = new Soroban();
+        for (const s of ds.steps) for (const m of s.moves) sb.applyMove(m);
+        assert(sb.value === ex.ops.reduce((x, y) => x + y, ex.start), `„${c.title}“: გამოთვლის დემო`);
+        n++;
+      }
+    }
+  }
+  note(`${n} დემო`);
+});
+
+test('ეტაპი 3: შემმოწმებელი იჭერს დარღვევებს (უარყოფითი ტესტი)', () => {
+  const L = (id) => getLevel(id);
+  const bad = [
+    ['10a', { kind: 'flash', minDigits: 1, digits: 1, terms: 3, ops: 'add' }, { kind: 'flash', terms: [5, -2, 4], answer: 7, level: '10a' }, 'გამოკლება flash anzan-ში'],
+    ['9c', { kind: 'mentalmul', aDigits: [2, 2], bDigits: 1 }, { kind: 'mentalmul', a: 23, b: 4, answer: 93, level: '9c' }, 'არასწორი ნამრავლი'],
+    ['9c', { kind: 'mentaldiv', bDigits: 1, qDigits: [2, 2] }, { kind: 'mentaldiv', a: 85, b: 4, q: 21, answer: 21, level: '9c' }, 'ნაშთიანი გაყოფა'],
+    ['fix', { kind: 'div', bDigits: 2, qDigits: [1, 1], fix: true, place: 0 }, { kind: 'div', a: 84, b: 42, aDec: 0, qDec: 0, place: 0, ansUnit: 3, q: 2, r: 0, answer: 2, level: 'fix', fix: true }, '修正 შესწორების გარეშე'],
+    ['9b', { kind: 'mental', minDigits: 1, digits: 1, terms: 3, ops: 'both' }, { kind: 'flash', terms: [3, 4, 5], answer: 12, level: '9b' }, 'სხვა ტიპი სხვა დონეზე'],
+    ['10b', { kind: 'div', bDigits: 1, qDigits: [2, 2], place: 0 }, { kind: 'div', a: 84, b: 4, aDec: 1, qDec: 1, place: 0, ansUnit: 2, q: 21, r: 0, answer: 21, level: '10b' }, 'ათწილადი გამოცდის დონეზე']
+  ];
+  for (const [id, spec, prob, label] of bad) {
+    let threw = false;
+    try { checkStage3Problem(prob, spec, L(id), 'neg'); } catch (e) { threw = true; }
+    assert(threw, `შემმოწმებელმა ვერ დაიჭირა: ${label}`);
+  }
+  note(`${bad.length} დარღვევა დაჭერილია`);
+});
+
+test('პროგრესი: ეტაპი 3 + არასავალდებულო 修正 (არ ბლოკავს რიგს), ტიპების სტატისტიკა, გამოცდები', () => {
+  const pr = new Progress(memoryStorage(), () => new Date(2026, 10, 26, 10));
+  const chain = LEVELS.filter((l) => !l.optional).map((l) => l.id);
+  for (const id of chain) {
+    if (String(id) === '7b') assert(!pr.isUnlocked('fix'), '修正 7ბ-მდე დაბლოკილია');
+    assert(pr.isUnlocked(id) && String(pr.currentLevelId()) === String(id), `${id} — მიმდინარე`);
+    pr.recordSession({ level: id, mode: 'test', accuracy: 1, avgSec: 3, passed: true });
+    if (String(id) === '7b') assert(pr.isUnlocked('fix'), '修正 იხსნება 7ბ-ის შემდეგ');
+  }
+  assert(pr.currentLevelId() === null && !pr.isPassed('fix'), 'ყველა სავალდებულო გავლილია; 修正 არასავალდებულოა');
+  pr.recordAnswer({ level: '6b', mode: 'tasks', problem: { kind: 'mul', a: 23, b: 4 }, correct: true, ms: 12000 });
+  pr.recordAnswer({ level: '6b', mode: 'tasks', problem: { kind: 'mul', a: 23, b: 5 }, correct: false, ms: 8000 });
+  const k = pr.data.kinds.mul;
+  assert(k.answered === 2 && k.correct === 1 && k.ms === 20000, 'ტიპის სტატისტიკა (დრო იწერება)');
+  pr.addExam({ grade: 'g7', score: 150, total: 200, passed: true, secs: 900 });
+  pr.addExam({ grade: 'g7', score: 170, total: 200, passed: true, secs: 800 });
+  assert(pr.bestExam('g7').score === 170 && pr.data.exams.length === 2, 'გამოცდების ისტორია');
+  const pr2 = new Progress(memoryStorage());
+  assert(pr2.importJSON(pr.exportJSON()).ok && pr2.data.kinds.mul.answered === 2 && pr2.data.exams.length === 2, 'ექსპორტი/იმპორტი');
 });
 
 // ---------------- შედეგი ----------------

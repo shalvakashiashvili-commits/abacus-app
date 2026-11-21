@@ -29,6 +29,12 @@ export function h(tag, attrs, ...children) {
   return el;
 }
 
+// უსაფრთხო ჩასმა: null/undefined/false-ს გამოტოვებს (DOM-ის append მათ ტექსტად „null“ წერს)
+export function put(parent, ...items) {
+  append(parent, items);
+  return parent;
+}
+
 function append(el, children) {
   for (const c of children) {
     if (c === null || c === undefined || c === false) continue;
